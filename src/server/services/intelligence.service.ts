@@ -354,9 +354,21 @@ function buildRecommendations(params: {
       effort: "BAIXO",
       category: "DADOS",
       affectedCount: unregistered.length,
-      evidenceSummary: `Valor potencial somado: ${unregistered
-        .reduce((a, o) => a + (o.estimatedValue ?? 0), 0)
-        .toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}.`,
+      evidenceSummary: (() => {
+        const soma = unregistered.reduce((a, o) => a + (o.estimatedValue ?? 0), 0);
+        const semValor = unregistered.filter((o) => o.estimatedValue === undefined).length;
+
+        // Dizer "R$ 0,00" faria a recomendacao parecer irrelevante quando na
+        // verdade o valor apenas ainda nao foi estimado em nenhuma conversa.
+        if (soma === 0) {
+          return `Nenhuma delas tem valor estimado ainda — justamente por nao ` +
+            `estarem registradas no funil.`;
+        }
+        const formatado = soma.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+        return semValor > 0
+          ? `Valor potencial somado: ${formatado}, sem contar ${semValor} sem valor estimado.`
+          : `Valor potencial somado: ${formatado}.`;
+      })(),
       relatedOpportunityIds: unregistered.slice(0, 10).map((o) => o.id),
     });
   }

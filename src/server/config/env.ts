@@ -44,13 +44,34 @@ export function getEnv(): AppEnv {
   const chatApiUrl = readString("FLW_CHAT_API_URL");
   const authApiUrl = readString("FLW_AUTH_API_URL");
 
+  /**
+   * URL publica do modulo.
+   *
+   * Ordem de resolucao:
+   *  1. APP_BASE_URL, quando definida explicitamente;
+   *  2. o dominio de producao da Vercel, quando houver;
+   *  3. a URL do deploy atual da Vercel (preview);
+   *  4. localhost, para desenvolvimento.
+   *
+   * Sem isso, um deploy sem APP_BASE_URL configurada anunciaria o endereco
+   * do webhook como "http://localhost:3000", que nao serve para nada.
+   */
+  const vercelProductionUrl = readString("VERCEL_PROJECT_PRODUCTION_URL");
+  const vercelDeploymentUrl = readString("VERCEL_URL");
+
+  const appBaseUrl =
+    readString("APP_BASE_URL") ??
+    (vercelProductionUrl ? `https://${vercelProductionUrl}` : undefined) ??
+    (vercelDeploymentUrl ? `https://${vercelDeploymentUrl}` : undefined) ??
+    "http://localhost:3000";
+
   cached = {
     apiToken: readString("FLW_API_TOKEN"),
     coreApiUrl: coreApiUrl ? stripTrailingSlash(coreApiUrl) : undefined,
     chatApiUrl: chatApiUrl ? stripTrailingSlash(chatApiUrl) : undefined,
     authApiUrl: authApiUrl ? stripTrailingSlash(authApiUrl) : undefined,
     aiProviderApiKey: readString("AI_PROVIDER_API_KEY"),
-    appBaseUrl: stripTrailingSlash(readString("APP_BASE_URL") ?? "http://localhost:3000"),
+    appBaseUrl: stripTrailingSlash(appBaseUrl),
     webhookSecret: readString("FLW_WEBHOOK_SECRET"),
     webhookSignatureHeader:
       readString("FLW_WEBHOOK_SIGNATURE_HEADER") ?? "x-klipflowi-signature",
