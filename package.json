@@ -9,7 +9,10 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "verify:scoring": "tsx --tsconfig scripts/tsconfig.json scripts/verify-scoring.ts"
+    "verify:scoring": "tsx --tsconfig scripts/tsconfig.json scripts/verify-scoring.ts",
+    "test": "tsx --tsconfig tests/tsconfig.json --test tests/*.test.ts",
+    "test:watch": "tsx --tsconfig tests/tsconfig.json --test --watch tests/*.test.ts",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "next": "^16.3.5",

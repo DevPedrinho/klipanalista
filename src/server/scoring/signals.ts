@@ -168,9 +168,12 @@ const POSITIVE_RULES: SignalRule[] = [
     weight: 1,
     direction: "INBOUND",
     patterns: [
-      /\bor[çc]amento\s+(foi\s+)?aprovad[oa]\b/i,
-      /\b(diretoria|financeiro|compras)\s+(aprovou|liberou|autorizou)\b/i,
-      /\bverba\s+(aprovada|liberada|dispon[íi]vel)\b/i,
+      // Aceita adverbios e verbos intermediarios: "o orcamento JA FOI aprovado",
+      // "o orcamento JA ESTA liberado". Sem isso, a forma mais natural em
+      // portugues passava despercebida.
+      /\bor[çc]amento\s+(?:j[áa]\s+)?(?:foi\s+|est[áa]\s+|se\s+encontra\s+)?(?:aprovad[oa]|liberad[oa]|autorizad[oa])\b/i,
+      /\b(diretoria|financeiro|compras|s[óo]cios?|conselho)\s+(?:j[áa]\s+)?(aprov(?:ou|aram)|liber(?:ou|aram)|autoriz(?:ou|aram))\b/i,
+      /\bverba\s+(?:j[áa]\s+)?(aprovada|liberada|dispon[íi]vel)\b/i,
       /\bprocesso\s+de\s+compra\b/i,
       /\bordem\s+de\s+compra\b/i,
     ],

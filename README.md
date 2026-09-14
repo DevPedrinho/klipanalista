@@ -15,7 +15,7 @@ Esta é a **primeira entrega**. O que está e o que não está funcionando:
 
 | | Situação |
 |---|---|
-| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando e testado** |
+| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 157 testes automatizados** |
 | ✅ Autenticação da API (`Authorization: Bearer pn_...`) | **Confirmada na documentação oficial** |
 | ✅ Caminhos dos endpoints de leitura | **Extraídos do índice oficial da documentação** |
 | 🟡 Dados exibidos | **Simulados.** Nenhuma chamada real à API foi feita ou testada |
@@ -39,6 +39,8 @@ Abra <http://localhost:3000> — a página inicial lista as rotas com a conta de
 Outros comandos:
 
 ```bash
+npm test                # 157 testes automatizados (~1s)
+npm run verify          # typecheck + lint + testes + build — rode antes de publicar
 npm run build           # build de produção
 npm run typecheck       # checagem de tipos
 npm run lint            # ESLint
@@ -193,6 +195,44 @@ Esperado: `202 enfileirado`. Repetir → `duplicado`. Alterar o corpo → `401`.
 
 ---
 
+## Testes automatizados
+
+```bash
+npm test
+```
+
+157 testes em 5 suítes, focados no que causa dano real se quebrar:
+
+| Suíte | O que protege |
+|---|---|
+| `tests/scoring.test.ts` | Palavra isolada não vira oportunidade · desqualificadores zeram o score · score ≠ confiança · tetos das 7 dimensões |
+| `tests/automation.test.ts` | **Cada ação sensível × cada modo**: nenhuma combinação executa sozinha · configuração não afrouxa a trava · isolamento por conta |
+| `tests/security.test.ts` | IDOR · escopo por perfil · parâmetros maliciosos na URL · mascaramento de telefone, e-mail, documento e token |
+| `tests/tags-endpoints.test.ts` | Etiqueta duplicada nunca é criada · criação exige aprovação · contrato pendente não pode ser chamado |
+| `tests/pipeline.test.ts` | Oportunidade ponta a ponta · auditoria mascarada · debounce da fila · chat admite quando não sabe |
+
+### Estes testes têm dentes
+
+Foram validados por sabotagem deliberada — quebrei cada trava e confirmei que a
+suíte acusa:
+
+| Sabotagem | Resultado |
+|---|---|
+| Remover "enviar mensagem" da lista de confirmação obrigatória | 1 teste falha |
+| Fazer o vendedor enxergar a equipe inteira | 3 testes falham |
+| Baixar o corte de score de 30 para 5 | 3 testes falham |
+
+### Um bug real que os testes encontraram
+
+O sinal `ORCAMENTO_APROVADO` — o de maior peso no motor — **não disparava** na
+forma mais natural em português: *"o orçamento **já** foi aprovado"*. O padrão
+exigia "orçamento foi aprovado" literal, sem advérbio no meio.
+
+Estava silenciosamente quebrado até no próprio dataset de exemplo. Após a
+correção, `sess_001` subiu de **76 para 81 pontos**.
+
+---
+
 ## Arquitetura
 
 ```
@@ -226,6 +266,7 @@ src/
     └── services/              Oportunidades, automação, etiquetas,
                                auditoria, chat, qualidade, fila
 db/migrations/0001_init.sql    14 tabelas com RLS por conta
+tests/                         157 testes automatizados
 ```
 
 ### Score (0–100)
@@ -302,3 +343,4 @@ usar a API. As **escritas** continuam bloqueadas até a validação dos contrato
 4. Trocar os repositórios em memória pelo Postgres de `db/migrations/`
 5. Conectar o provedor de IA ao chat, mantendo as citações obrigatórias
 6. Testar contra a API real em conta de homologação
+7. Rodar `npm run verify` em CI a cada pull request
