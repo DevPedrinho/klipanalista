@@ -195,6 +195,57 @@ Esperado: `202 enfileirado`. Repetir → `duplicado`. Alterar o corpo → `401`.
 
 ---
 
+## Banco de dados
+
+Duas migrações, aplicadas nesta ordem:
+
+| Arquivo | O que faz |
+|---|---|
+| `db/migrations/0001_init.sql` | 14 tabelas, 40 índices, 6 tipos enum, RLS por conta e auditoria imutável. Portável para qualquer PostgreSQL 13+ |
+| `db/migrations/0002_supabase.sql` | Específico do Supabase: fecha a API REST automática e cria o papel de aplicação que respeita RLS |
+
+### Por que o 0002 existe
+
+O Supabase tem duas características que, ignoradas, deixam o banco aberto:
+
+1. **Publica as tabelas do schema `public` como API REST**, acessível pelo
+   navegador com a chave anônima. Este módulo não é acessado pelo navegador —
+   quem fala com o banco é o backend. O `0002` revoga `anon` e `authenticated`.
+2. **A string de conexão padrão usa o papel `postgres`, que é superusuário** —
+   e superusuário **ignora Row Level Security**. Conectar assim tornaria as 13
+   políticas decorativas. O `0002` cria `flowi_app`, sem `SUPERUSER` e sem
+   `BYPASSRLS`.
+
+> **Conecte a aplicação como `flowi_app`, nunca como `postgres`.** O passo final
+> (definir a senha e montar a `DATABASE_URL`) está comentado no fim do `0002`,
+> fora do versionamento.
+
+### Comportamento verificado
+
+Ambas foram aplicadas do zero em um PostgreSQL 16 local, com os papéis do
+Supabase simulados:
+
+| Verificação | Resultado |
+|---|---|
+| `anon` lê a auditoria | negado |
+| `authenticated` lê as conversas | negado |
+| `flowi_app` sem conta definida | 0 linhas — falha fechado |
+| `flowi_app` com uma conta | apenas os registros daquela conta |
+| Gravar registro de outra conta | recusado pela RLS |
+| `flowi_app` alterar a auditoria | sem privilégio |
+| Superusuário adulterar a auditoria | erro, conteúdo preservado |
+| Reaplicar o `0002` | idempotente |
+
+### Testar localmente
+
+```bash
+createdb flowi_local
+psql -d flowi_local -f db/migrations/0001_init.sql
+psql -d flowi_local -f db/migrations/0002_supabase.sql
+```
+
+---
+
 ## Testes automatizados
 
 ```bash
@@ -265,7 +316,7 @@ src/
     │                          Tags · Panels · Cards · Agents · Webhooks
     └── services/              Oportunidades, automação, etiquetas,
                                auditoria, chat, qualidade, fila
-db/migrations/0001_init.sql    14 tabelas com RLS por conta
+db/migrations/                 0001 esquema · 0002 ajustes do Supabase
 tests/                         157 testes automatizados
 ```
 
@@ -341,6 +392,7 @@ usar a API. As **escritas** continuam bloqueadas até a validação dos contrato
 2. Implementar o login integrado (`authAdapter`)
 3. Confirmar a assinatura dos webhooks
 4. Trocar os repositórios em memória pelo Postgres de `db/migrations/`
+   (o banco já está pronto e testado — falta a camada de acesso no código)
 5. Conectar o provedor de IA ao chat, mantendo as citações obrigatórias
 6. Testar contra a API real em conta de homologação
 7. Rodar `npm run verify` em CI a cada pull request

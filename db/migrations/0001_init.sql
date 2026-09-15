@@ -16,7 +16,10 @@
 
 BEGIN;
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- `gen_random_uuid()` faz parte do núcleo do PostgreSQL desde a versão 13,
+-- portanto nenhuma extensão é necessária. No Supabase isso importa: as
+-- extensões vivem no schema `extensions`, e um `CREATE EXTENSION` solto pode
+-- cair no schema errado.
 
 -- ---------------------------------------------------------------------------
 -- Tipos
@@ -387,15 +390,41 @@ CREATE INDEX idx_audit_account_time ON audit_logs (account_id, occurred_at DESC)
 CREATE INDEX idx_audit_account_target ON audit_logs (account_id, target_id);
 CREATE INDEX idx_audit_account_user ON audit_logs (account_id, requested_by_user_id);
 
+-- ---------------------------------------------------------------------------
+-- Imutabilidade da auditoria
+-- ---------------------------------------------------------------------------
 -- Auditoria é registro histórico: alterar ou apagar descaracteriza a trilha.
-CREATE RULE audit_logs_no_update AS ON UPDATE TO audit_logs DO INSTEAD NOTHING;
-CREATE RULE audit_logs_no_delete AS ON DELETE TO audit_logs DO INSTEAD NOTHING;
+--
+-- A tentativa levanta erro em vez de ser descartada em silêncio. Um `DO INSTEAD
+-- NOTHING` devolveria "UPDATE 0" e quem tentou adulterar acharia que funcionou;
+-- o erro torna a tentativa visível para a aplicação e para o log do banco.
+CREATE OR REPLACE FUNCTION audit_logs_imutavel() RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION
+    'audit_logs e um registro historico imutavel: % nao e permitido.', TG_OP
+    USING HINT = 'Registre um novo evento descrevendo a correcao, nunca altere o anterior.';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_logs_sem_update
+  BEFORE UPDATE ON audit_logs
+  FOR EACH STATEMENT EXECUTE FUNCTION audit_logs_imutavel();
+
+CREATE TRIGGER audit_logs_sem_delete
+  BEFORE DELETE ON audit_logs
+  FOR EACH STATEMENT EXECUTE FUNCTION audit_logs_imutavel();
 
 -- ===========================================================================
 -- Row Level Security
 -- ---------------------------------------------------------------------------
 -- A aplicação define `SET LOCAL app.current_account_id = '<accountId>'` no
 -- início de cada transação. Sem isso, nenhuma linha é visível.
+--
+-- ATENÇÃO — ISTO SÓ PROTEGE SE A CONEXÃO NÃO FOR DE SUPERUSUÁRIO.
+-- Superusuários (e papéis com BYPASSRLS) ignoram as políticas abaixo. No
+-- Supabase, a string de conexão padrão usa o papel `postgres`, que é
+-- superusuário: conectar assim torna estas políticas decorativas.
+-- A aplicação deve conectar com o papel criado em 0002_supabase.sql.
 -- ===========================================================================
 
 CREATE OR REPLACE FUNCTION current_account_id() RETURNS TEXT AS $$
