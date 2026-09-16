@@ -13,6 +13,10 @@ import {
   listPendingEndpoints,
   resolvePath,
 } from "@/server/integration/endpoints";
+import {
+  OPERACAO_DE_ETIQUETAS,
+  TAG_OPERATIONS,
+} from "@/server/integration/adapters/contacts.adapter";
 
 /**
  * Testes da taxonomia de etiquetas e do registry de endpoints.
@@ -261,5 +265,59 @@ describe("resolvePath", () => {
       () => resolvePath(ENDPOINTS.AUTH.INTEGRATED_LOGIN, {}),
       /nao possui caminho definido/,
     );
+  });
+});
+
+/* ==========================================================================
+   Operação de etiquetas — trava de segurança
+   ==========================================================================
+   A API aceita três operações, e uma delas é destrutiva. Este bloco existe
+   para que ninguém troque a operação por engano num refactor futuro.
+   ========================================================================== */
+describe("operacao usada ao aplicar etiquetas", () => {
+  it("usa InsertIfNotExists, que apenas acrescenta", () => {
+    assert.equal(OPERACAO_DE_ETIQUETAS, "InsertIfNotExists");
+  });
+
+  it("NUNCA usa ReplaceAll, que apagaria as etiquetas da equipe", () => {
+    assert.notEqual(
+      OPERACAO_DE_ETIQUETAS,
+      TAG_OPERATIONS.SUBSTITUIR_TUDO,
+      "ReplaceAll remove todas as etiquetas do contato antes de gravar",
+    );
+  });
+
+  it("NUNCA usa DeleteIfExists ao aplicar", () => {
+    assert.notEqual(OPERACAO_DE_ETIQUETAS, TAG_OPERATIONS.REMOVER_SE_PRESENTE);
+  });
+
+  it("mantem os literais exatos aceitos pela API", () => {
+    // Trocar qualquer um destes por um valor inventado faria a API recusar.
+    assert.equal(TAG_OPERATIONS.INSERIR_SE_AUSENTE, "InsertIfNotExists");
+    assert.equal(TAG_OPERATIONS.REMOVER_SE_PRESENTE, "DeleteIfExists");
+    assert.equal(TAG_OPERATIONS.SUBSTITUIR_TUDO, "ReplaceAll");
+  });
+});
+
+/* ==========================================================================
+   Grupos de serviço confirmados pela documentação
+   ========================================================================== */
+describe("grupos de servico", () => {
+  it("contatos ficam em core (URL literal na documentacao)", () => {
+    assert.equal(ENDPOINTS.CONTACTS.SET_TAGS.group, "core");
+    assert.equal(ENDPOINTS.CONTACTS.SET_TAGS.trust, "CONFIRMED");
+  });
+
+  it("conversas e mensagens ficam em chat", () => {
+    assert.equal(ENDPOINTS.SESSIONS.LIST.group, "chat");
+    assert.equal(ENDPOINTS.MESSAGES.LIST_BY_SESSION.group, "chat");
+  });
+
+  it("paineis e cards ficam em crm, nao em core", () => {
+    // O menu da documentacao separa Crm de Core. Marcar como core produziria 404.
+    assert.equal(ENDPOINTS.PANELS.LIST.group, "crm");
+    assert.equal(ENDPOINTS.CARDS.LIST.group, "crm");
+    assert.equal(ENDPOINTS.CARDS.UPDATE.group, "crm");
+    assert.equal(ENDPOINTS.CARD_NOTES.CREATE.group, "crm");
   });
 });

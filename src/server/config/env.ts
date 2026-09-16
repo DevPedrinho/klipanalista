@@ -23,6 +23,7 @@ export interface AppEnv {
   apiToken?: string;
   coreApiUrl?: string;
   chatApiUrl?: string;
+  crmApiUrl?: string;
   authApiUrl?: string;
   aiProviderApiKey?: string;
   appBaseUrl: string;
@@ -42,6 +43,7 @@ export function getEnv(): AppEnv {
 
   const coreApiUrl = readString("FLW_CORE_API_URL");
   const chatApiUrl = readString("FLW_CHAT_API_URL");
+  const crmApiUrl = readString("FLW_CRM_API_URL");
   const authApiUrl = readString("FLW_AUTH_API_URL");
 
   /**
@@ -69,6 +71,7 @@ export function getEnv(): AppEnv {
     apiToken: readString("FLW_API_TOKEN"),
     coreApiUrl: coreApiUrl ? stripTrailingSlash(coreApiUrl) : undefined,
     chatApiUrl: chatApiUrl ? stripTrailingSlash(chatApiUrl) : undefined,
+    crmApiUrl: crmApiUrl ? stripTrailingSlash(crmApiUrl) : undefined,
     authApiUrl: authApiUrl ? stripTrailingSlash(authApiUrl) : undefined,
     aiProviderApiKey: readString("AI_PROVIDER_API_KEY"),
     appBaseUrl: stripTrailingSlash(appBaseUrl),
@@ -108,6 +111,7 @@ export function getIntegrationReadiness(): IntegrationReadiness {
   if (!env.apiToken) missing.push("FLW_API_TOKEN");
   if (!env.coreApiUrl) missing.push("FLW_CORE_API_URL");
   if (!env.chatApiUrl) missing.push("FLW_CHAT_API_URL");
+  if (!env.crmApiUrl) missing.push("FLW_CRM_API_URL");
 
   return {
     ready: env.dataMode === "live" && missing.length === 0,

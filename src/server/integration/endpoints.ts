@@ -19,13 +19,21 @@ import type { ContractTrust } from "@/domain/enums";
  *    endpoint. Normalmente e o `group` (prefixo de servico) ou o formato do
  *    corpo da requisicao. Ver o campo `pending` de cada entrada.
  *
- * SOBRE O PREFIXO DE SERVICO (`group`):
- * A documentacao confirma DOIS prefixos em descricoes de endpoints:
- *   - "POST /core/v2/file"              -> grupo `core`
- *   - "/chat/v1/message/{id}/status"    -> grupo `chat`
- * Para os demais grupos o prefixo foi INFERIDO pela natureza do recurso e
- * esta marcado como pendente. Confirme abrindo a pagina do endpoint
- * (acrescente `.md` a URL) e ajuste aqui ou via variavel de ambiente.
+ * URL BASE — CONFIRMADA:
+ *   A pagina de "Atualizar etiquetas" mostra a URL completa:
+ *     https://api.wts.chat/core/v1/contact/{id}/tags
+ *   Portanto o host e `api.wts.chat` e o caminho e /{grupo}/{versao}/{recurso}.
+ *
+ * GRUPOS DE SERVICO — conforme o menu da documentacao oficial:
+ *   core -> Arquivos, Campos, Carteiras, Contatos, Equipes, Etiquetas,
+ *           Horarios de Atendimento, Usuarios, Webhooks
+ *   chat -> Canais, Chatbots, Conversas, Envios, Mensagens, Mensagens
+ *           Agendadas, Modelos de Mensagem, Sequencias
+ *   crm  -> Cards, Paineis
+ *
+ * Prefixos comprovados por URL literal na documentacao: `core` (contatos) e
+ * `chat` (status de mensagem). Os demais seguem o agrupamento do menu e estao
+ * marcados como pendentes ate que uma pagina mostre a URL completa.
  *
  * OVERRIDE POR AMBIENTE:
  * Qualquer caminho pode ser sobrescrito por `FLW_EP_<CHAVE>`, ex.:
@@ -34,7 +42,7 @@ import type { ContractTrust } from "@/domain/enums";
  */
 
 /** Grupos de servico. Cada um resolve para uma URL base propria. */
-export type ApiGroup = "core" | "chat" | "auth";
+export type ApiGroup = "core" | "chat" | "crm" | "auth";
 
 export interface EndpointContract {
   /** Chave estavel usada pelos adapters e pelos overrides de ambiente. */
@@ -53,7 +61,8 @@ export interface EndpointContract {
 
 /** Motivo padrao de pendencia quando so falta confirmar o prefixo de servico. */
 const PREFIXO_PENDENTE =
-  "Prefixo de servico (core/chat) inferido: confirmar na pagina do endpoint.";
+  "Prefixo de servico vem do agrupamento do menu da documentacao, nao de uma " +
+  "URL literal. Confirme abrindo a pagina do endpoint e lendo o endereco completo.";
 
 /** Prefixo confirmado em descricao oficial da documentacao. */
 const NADA_PENDENTE: string[] = [];
@@ -123,24 +132,32 @@ const SESSION_NOTES = {
    CONTATOS (grupo inferido: core)
    ========================================================================== */
 const CONTACTS = {
-  LIST: ep("CONTACTS_LIST", "GET", "/v1/contact", "core", "Listagem paginada de contatos."),
+  LIST: ep("CONTACTS_LIST", "GET", "/v1/contact", "core", "Listagem paginada de contatos.", NADA_PENDENTE),
   FILTER: ep("CONTACTS_FILTER", "POST", "/v1/contact/filter", "core", "Filtragem paginada de contatos.", [
     PREFIXO_PENDENTE,
     "Campos aceitos no corpo do filtro: confirmar na pagina do endpoint.",
   ]),
-  GET_BY_ID: ep("CONTACTS_GET_BY_ID", "GET", "/v1/contact/{id}", "core", "Obter contato por ID."),
-  GET_BY_PHONE: ep("CONTACTS_GET_BY_PHONE", "GET", "/v1/contact/phonenumber/{phone}", "core", "Obter contato por numero de telefone."),
+  GET_BY_ID: ep("CONTACTS_GET_BY_ID", "GET", "/v1/contact/{id}", "core", "Obter contato por ID.", NADA_PENDENTE),
+  GET_BY_PHONE: ep("CONTACTS_GET_BY_PHONE", "GET", "/v1/contact/phonenumber/{phone}", "core", "Obter contato por numero de telefone.", NADA_PENDENTE),
   CREATE: ep("CONTACTS_CREATE", "POST", "/v1/contact", "core", "Criar contato."),
   UPDATE: ep("CONTACTS_UPDATE", "PUT", "/v2/contact/{id}", "core", "Atualizar contato."),
   UPDATE_BY_PHONE: ep("CONTACTS_UPDATE_BY_PHONE", "PUT", "/v1/contact/phonenumber/{phone}", "core", "Atualizar contato por telefone."),
-  SET_TAGS: ep("CONTACTS_SET_TAGS", "POST", "/v1/contact/{id}/tags", "core", "Atualizar etiquetas do contato.", [
-    PREFIXO_PENDENTE,
-    "Semantica do corpo: confirmar se substitui a lista inteira ou adiciona.",
-  ]),
-  SET_TAGS_BY_PHONE: ep("CONTACTS_SET_TAGS_BY_PHONE", "POST", "/v1/contact/phonenumber/{phone}/tags", "core", "Atualizar etiquetas por telefone.", [
-    PREFIXO_PENDENTE,
-    "Semantica do corpo: confirmar se substitui a lista inteira ou adiciona.",
-  ]),
+  /**
+   * CONFIRMADO: https://api.wts.chat/core/v1/contact/{id}/tags
+   *
+   * O corpo carrega `tagNames` e/ou `tagIds` mais um campo `operation` que
+   * define explicitamente a semantica:
+   *   InsertIfNotExists - insere as que ainda nao estao no contato
+   *   DeleteIfExists    - remove as que estao no contato
+   *   ReplaceAll        - APAGA TODAS as etiquetas e grava apenas as enviadas
+   *
+   * A IA usa exclusivamente InsertIfNotExists. ReplaceAll destruiria as
+   * etiquetas que a equipe aplicou manualmente.
+   *
+   * O parametro de caminho aceita o ID do contato OU o numero de telefone.
+   */
+  SET_TAGS: ep("CONTACTS_SET_TAGS", "POST", "/v1/contact/{id}/tags", "core", "Atualizar etiquetas do contato.", NADA_PENDENTE),
+  SET_TAGS_BY_PHONE: ep("CONTACTS_SET_TAGS_BY_PHONE", "POST", "/v1/contact/phonenumber/{phone}/tags", "core", "Atualizar etiquetas por telefone.", NADA_PENDENTE),
   CUSTOM_FIELDS: ep("CONTACTS_CUSTOM_FIELDS", "GET", "/v1/contact/custom-field", "core", "Campos personalizados de contato."),
 } as const;
 
@@ -159,28 +176,28 @@ const TAGS = {
    PAINEIS E CARDS DO CRM (grupo inferido: core)
    ========================================================================== */
 const PANELS = {
-  LIST: ep("PANELS_LIST", "GET", "/v2/panel", "core", "Listar paineis."),
-  GET_BY_ID: ep("PANELS_GET_BY_ID", "GET", "/v1/panel/{id}", "core", "Obter painel por ID (inclui etapas)."),
-  CUSTOM_FIELDS: ep("PANELS_CUSTOM_FIELDS", "GET", "/v1/panel/{id}/custom-fields", "core", "Campos personalizados do painel."),
-  LOST_REASONS: ep("PANELS_LOST_REASONS", "GET", "/v1/panel/{id}/lost-reason", "core", "Listagem paginada de motivos de perda do painel."),
+  LIST: ep("PANELS_LIST", "GET", "/v2/panel", "crm", "Listar paineis."),
+  GET_BY_ID: ep("PANELS_GET_BY_ID", "GET", "/v1/panel/{id}", "crm", "Obter painel por ID (inclui etapas)."),
+  CUSTOM_FIELDS: ep("PANELS_CUSTOM_FIELDS", "GET", "/v1/panel/{id}/custom-fields", "crm", "Campos personalizados do painel."),
+  LOST_REASONS: ep("PANELS_LOST_REASONS", "GET", "/v1/panel/{id}/lost-reason", "crm", "Listagem paginada de motivos de perda do painel."),
 } as const;
 
 const CARDS = {
-  LIST: ep("CARDS_LIST", "GET", "/v2/panel/card", "core", "Listagem paginada de cards."),
-  CREATE: ep("CARDS_CREATE", "POST", "/v2/panel/card", "core", "Criar card."),
-  GET_BY_ID: ep("CARDS_GET_BY_ID", "GET", "/v2/panel/card/{id}", "core", "Obter card por ID."),
-  UPDATE: ep("CARDS_UPDATE", "PUT", "/v3/panel/card/{id}", "core", "Atualizar card (etapa, responsavel, valor, status).", [
+  LIST: ep("CARDS_LIST", "GET", "/v2/panel/card", "crm", "Listagem paginada de cards."),
+  CREATE: ep("CARDS_CREATE", "POST", "/v2/panel/card", "crm", "Criar card."),
+  GET_BY_ID: ep("CARDS_GET_BY_ID", "GET", "/v2/panel/card/{id}", "crm", "Obter card por ID."),
+  UPDATE: ep("CARDS_UPDATE", "PUT", "/v3/panel/card/{id}", "crm", "Atualizar card (etapa, responsavel, valor, status).", [
     PREFIXO_PENDENTE,
     "Nomes exatos dos campos do corpo na v3: confirmar antes de qualquer escrita.",
     "Confirmar como o status WON/LOST e enviado e onde entra o motivo de perda.",
   ]),
-  DUPLICATE: ep("CARDS_DUPLICATE", "POST", "/v2/panel/card/{id}/duplicate", "core", "Duplicar card."),
+  DUPLICATE: ep("CARDS_DUPLICATE", "POST", "/v2/panel/card/{id}/duplicate", "crm", "Duplicar card."),
 } as const;
 
 const CARD_NOTES = {
-  LIST: ep("CARD_NOTES_LIST", "GET", "/v1/panel/card/{cardId}/note", "core", "Listagem paginada de anotacoes do card."),
-  CREATE: ep("CARD_NOTES_CREATE", "POST", "/v1/panel/card/{cardId}/note", "core", "Adicionar anotacao ao card."),
-  DELETE: ep("CARD_NOTES_DELETE", "DELETE", "/v1/panel/card/{cardId}/note/{noteId}", "core", "Remover anotacao do card."),
+  LIST: ep("CARD_NOTES_LIST", "GET", "/v1/panel/card/{cardId}/note", "crm", "Listagem paginada de anotacoes do card."),
+  CREATE: ep("CARD_NOTES_CREATE", "POST", "/v1/panel/card/{cardId}/note", "crm", "Adicionar anotacao ao card."),
+  DELETE: ep("CARD_NOTES_DELETE", "DELETE", "/v1/panel/card/{cardId}/note/{noteId}", "crm", "Remover anotacao do card."),
 } as const;
 
 /* ==========================================================================

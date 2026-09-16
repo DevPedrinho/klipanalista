@@ -15,11 +15,12 @@ Esta é a **primeira entrega**. O que está e o que não está funcionando:
 
 | | Situação |
 |---|---|
-| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 157 testes automatizados** |
+| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 164 testes automatizados** |
 | ✅ Autenticação da API (`Authorization: Bearer pn_...`) | **Confirmada na documentação oficial** |
 | ✅ Caminhos dos endpoints de leitura | **Extraídos do índice oficial da documentação** |
 | 🟡 Dados exibidos | **Simulados.** Nenhuma chamada real à API foi feita ou testada |
-| 🔴 Escrita no CRM (criar/atualizar card, aplicar etiqueta) | **Bloqueada de propósito** — contratos não validados |
+| ✅ Aplicar etiquetas no contato | **Liberado** — contrato confirmado, operação aditiva |
+| 🔴 Escrita de card no CRM (criar/atualizar) | **Bloqueada de propósito** — campos do corpo não validados |
 | 🔴 Envio de mensagem ao cliente | **Não implementado** — exige confirmação humana sempre |
 
 **Nenhuma integração foi testada contra a API real.** Tudo que a interface mostra
@@ -39,7 +40,7 @@ Abra <http://localhost:3000> — a página inicial lista as rotas com a conta de
 Outros comandos:
 
 ```bash
-npm test                # 157 testes automatizados (~1s)
+npm test                # 164 testes automatizados (~1s)
 npm run verify          # typecheck + lint + testes + build — rode antes de publicar
 npm run build           # build de produção
 npm run typecheck       # checagem de tipos
@@ -101,9 +102,23 @@ Os caminhos vieram do índice oficial (`https://flwchat.readme.io/llms.txt`). O 
 falta está declarado explicitamente em `src/server/integration/endpoints.ts` e
 listado em tempo real por **`GET /api/health`** e pela tela de configurações.
 
-**Confirmado** (17 endpoints): conversas (`/v2/session`), mensagens
-(`/v1/session/{id}/message`), notas internas, envio de mensagem.
-O prefixo `chat` é certo porque a documentação cita `/chat/v1/message/{id}/status`.
+**URL base confirmada:** a página "Atualizar etiquetas" mostra o endereço
+completo — `https://api.wts.chat/core/v1/contact/{id}/tags`. O host é
+`api.wts.chat` e o caminho segue `/{grupo}/{versão}/{recurso}`.
+
+**Três grupos, não dois.** O menu da documentação separa:
+
+| Grupo | Recursos |
+|---|---|
+| `core` | contatos, etiquetas, equipes, usuários, webhooks, arquivos, campos |
+| `chat` | conversas, mensagens, notas internas, canais, chatbots, envios |
+| `crm` | **painéis e cards** |
+
+> Painéis e cards estavam classificados como `core` por inferência minha. Estão
+> em `crm`. Isso teria produzido 404 em produção.
+
+**Confirmado** (22 endpoints): conversas, mensagens, notas internas, envio de
+mensagem, e todo o grupo de contatos — incluindo etiquetas.
 
 **Pendente** (42 endpoints), em três grupos:
 
@@ -115,9 +130,11 @@ O prefixo `chat` é certo porque a documentação cita `/chat/v1/message/{id}/st
 2. **Contratos críticos de escrita** — bloqueiam a execução real:
    - `PUT /v3/panel/card/{id}` — nomes dos campos do corpo, e como `WON`/`LOST` e o
      motivo de perda são enviados. Libere com `FLW_CARD_WRITE_CONFIRMED=true`.
-   - `POST /v1/contact/{id}/tags` — **substitui a lista inteira ou adiciona?**
-     Errar aqui apagaria etiquetas aplicadas manualmente pela equipe. Libere com
-     `FLW_CONTACT_TAGS_SEMANTICS=replace` ou `=append`.
+   - ~~`POST /v1/contact/{id}/tags`~~ — **resolvido.** A API tem um campo
+     `operation` explícito: `InsertIfNotExists`, `DeleteIfExists` ou
+     `ReplaceAll`. O módulo usa exclusivamente **`InsertIfNotExists`**, que
+     apenas acrescenta. `ReplaceAll` apagaria as etiquetas manuais da equipe, e
+     dois testes automatizados impedem essa troca.
 
 3. **Não constam do índice**:
    - **Login integrado** — método, caminho e formato do token
@@ -252,7 +269,7 @@ psql -d flowi_local -f db/migrations/0002_supabase.sql
 npm test
 ```
 
-157 testes em 5 suítes, focados no que causa dano real se quebrar:
+164 testes em 5 suítes, focados no que causa dano real se quebrar:
 
 | Suíte | O que protege |
 |---|---|
@@ -317,7 +334,7 @@ src/
     └── services/              Oportunidades, automação, etiquetas,
                                auditoria, chat, qualidade, fila
 db/migrations/                 0001 esquema · 0002 ajustes do Supabase
-tests/                         157 testes automatizados
+tests/                         164 testes automatizados
 ```
 
 ### Score (0–100)

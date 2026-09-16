@@ -3,7 +3,11 @@ import "server-only";
 export { authAdapter, buildSessionPath, type DeepLinkResult } from "./auth.adapter";
 export { sessionsAdapter } from "./sessions.adapter";
 export { messagesAdapter } from "./messages.adapter";
-export { contactsAdapter } from "./contacts.adapter";
+export {
+  contactsAdapter,
+  TAG_OPERATIONS,
+  OPERACAO_DE_ETIQUETAS,
+} from "./contacts.adapter";
 export { tagsAdapter } from "./tags.adapter";
 export { panelsAdapter } from "./panels.adapter";
 export {

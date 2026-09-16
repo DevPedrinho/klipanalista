@@ -89,6 +89,9 @@ function baseUrlFor(group: ApiGroup): string | undefined {
       return env.coreApiUrl;
     case "chat":
       return env.chatApiUrl;
+    case "crm":
+      // Paineis e cards. Sem FLW_CRM_API_URL definida, recai sobre o core.
+      return env.crmApiUrl ?? env.coreApiUrl;
     case "auth":
       // Sem FLW_AUTH_API_URL, o grupo auth recai sobre o core.
       return env.authApiUrl ?? env.coreApiUrl;
