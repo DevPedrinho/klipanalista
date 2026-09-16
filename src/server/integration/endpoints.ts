@@ -31,9 +31,12 @@ import type { ContractTrust } from "@/domain/enums";
  *           Agendadas, Modelos de Mensagem, Sequencias
  *   crm  -> Cards, Paineis
  *
- * Prefixos comprovados por URL literal na documentacao: `core` (contatos) e
- * `chat` (status de mensagem). Os demais seguem o agrupamento do menu e estao
- * marcados como pendentes ate que uma pagina mostre a URL completa.
+ * Prefixos comprovados por URL literal na documentacao:
+ *   core -> https://api.wts.chat/core/v1/contact/{id}/tags
+ *   crm  -> https://api.wts.chat/crm/v3/panel/card/{id}
+ *   chat -> citado como /chat/v1/message/{id}/status
+ * Os endpoints ainda marcados como pendentes sao os que nao tiveram a pagina
+ * detalhada consultada.
  *
  * OVERRIDE POR AMBIENTE:
  * Qualquer caminho pode ser sobrescrito por `FLW_EP_<CHAVE>`, ex.:
@@ -176,20 +179,37 @@ const TAGS = {
    PAINEIS E CARDS DO CRM (grupo inferido: core)
    ========================================================================== */
 const PANELS = {
-  LIST: ep("PANELS_LIST", "GET", "/v2/panel", "crm", "Listar paineis."),
+  LIST: ep("PANELS_LIST", "GET", "/v2/panel", "crm", "Listar paineis.", NADA_PENDENTE),
   GET_BY_ID: ep("PANELS_GET_BY_ID", "GET", "/v1/panel/{id}", "crm", "Obter painel por ID (inclui etapas)."),
   CUSTOM_FIELDS: ep("PANELS_CUSTOM_FIELDS", "GET", "/v1/panel/{id}/custom-fields", "crm", "Campos personalizados do painel."),
-  LOST_REASONS: ep("PANELS_LOST_REASONS", "GET", "/v1/panel/{id}/lost-reason", "crm", "Listagem paginada de motivos de perda do painel."),
+  LOST_REASONS: ep("PANELS_LOST_REASONS", "GET", "/v1/panel/{id}/lost-reason", "crm", "Listagem paginada de motivos de perda do painel.", NADA_PENDENTE),
 } as const;
 
 const CARDS = {
-  LIST: ep("CARDS_LIST", "GET", "/v2/panel/card", "crm", "Listagem paginada de cards."),
-  CREATE: ep("CARDS_CREATE", "POST", "/v2/panel/card", "crm", "Criar card."),
-  GET_BY_ID: ep("CARDS_GET_BY_ID", "GET", "/v2/panel/card/{id}", "crm", "Obter card por ID."),
+  LIST: ep("CARDS_LIST", "GET", "/v2/panel/card", "crm", "Listagem paginada de cards.", NADA_PENDENTE),
+  CREATE: ep("CARDS_CREATE", "POST", "/v2/panel/card", "crm", "Criar card.", [
+    "Corpo de criacao nao foi consultado; os nomes seguem o contrato da v3 de atualizacao.",
+  ]),
+  GET_BY_ID: ep("CARDS_GET_BY_ID", "GET", "/v2/panel/card/{id}", "crm", "Obter card por ID.", NADA_PENDENTE),
+  /**
+   * CONFIRMADO: PUT https://api.wts.chat/crm/v3/panel/card/{id}
+   *
+   * O corpo carrega `fields`, a lista dos campos que estao sendo atualizados,
+   * mais os proprios valores. Campos fora de `fields` nao sao tocados.
+   *
+   * Nomes oficiais que corrigiram suposicoes anteriores deste modulo:
+   *   contactIds (lista)   em vez de contactId
+   *   responsibleUserId    em vez de responsibleId
+   *   monetaryAmount       em vez de amount
+   *   lostReasonId         em vez de lossReasonId
+   *
+   * `status` aceita OPEN | WON | LOST | ARCHIVED, e o motivo de perda vai em
+   * `lostReasonId` — respondendo a duvida que mantinha a escrita bloqueada.
+   */
   UPDATE: ep("CARDS_UPDATE", "PUT", "/v3/panel/card/{id}", "crm", "Atualizar card (etapa, responsavel, valor, status).", [
-    PREFIXO_PENDENTE,
-    "Nomes exatos dos campos do corpo na v3: confirmar antes de qualquer escrita.",
-    "Confirmar como o status WON/LOST e enviado e onde entra o motivo de perda.",
+    "Os 14 valores do enum `fields` estao ocultos na documentacao publica " +
+      "(Show 14 enum values). A grafia PascalCase e inferida do texto da " +
+      "propria pagina; ajustavel por FLW_CARD_FIELDS_CASE.",
   ]),
   DUPLICATE: ep("CARDS_DUPLICATE", "POST", "/v2/panel/card/{id}/duplicate", "crm", "Duplicar card."),
 } as const;

@@ -115,10 +115,19 @@ export interface ConversationSnapshot {
    CRM
    ========================================================================== */
 
+/**
+ * Fase da etapa no funil, conforme a API.
+ * CONFIRMADO no contrato de card: `stepPhase` e um enum NONE | INITIAL | FINAL.
+ * Na tela de edicao do painel aparece como Inicial / Intermediario / Final.
+ */
+export type StepPhase = "NONE" | "INITIAL" | "FINAL";
+
 export interface PanelStep {
   id: string;
   name: string;
   order: number;
+  /** NONE = intermediaria. INITIAL = entrada do funil. FINAL = desfecho. */
+  phase?: StepPhase;
   /** Etapa usada para triagem automatica no modo AUTOMATICO_CONTROLADO. */
   isTriage?: boolean;
 }
@@ -135,15 +144,35 @@ export interface CrmCard {
   id: string;
   accountId: string;
   panelId: string;
+  /** Titulo do painel, quando a resposta o traz. */
+  panelTitle?: string;
   stepId: string;
+  /** Titulo da etapa, vindo da propria resposta do card. */
+  stepName?: string;
+  stepPhase?: StepPhase;
   title: string;
+
+  /**
+   * Um card pode referenciar VARIOS contatos: o campo da API e `contactIds`.
+   * Guardamos a lista inteira; `contactId` e apenas atalho para o primeiro.
+   */
+  contactIds: string[];
   contactId?: string;
+
   sessionId?: string;
+  /** API: `responsibleUserId`. */
   responsibleId?: string;
+  responsibleName?: string;
+  /** API: `monetaryAmount`. */
   amount?: number;
   description?: string;
   dueDate?: string;
+  /** A propria API calcula se o vencimento passou. */
+  isOverdue?: boolean;
   status: CardStatus;
+  /** Preenchido quando o card esta LOST. */
+  lostReasonId?: string;
+  lostReasonName?: string;
   createdAt: string;
   updatedAt: string;
 }

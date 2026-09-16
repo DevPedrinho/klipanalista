@@ -437,6 +437,7 @@ export const MOCK_CARDS: CrmCard[] = [
     // exercita a deteccao de etapa provavelmente errada.
     stepId: "step_qualificacao",
     title: "Metalurgica Pinto & Filhos - Chapa galvanizada",
+    contactIds: ["cont_003"],
     contactId: "cont_003",
     sessionId: "sess_002",
     responsibleId: "user_bruno",
@@ -452,6 +453,7 @@ export const MOCK_CARDS: CrmCard[] = [
     panelId: "panel_vendas",
     stepId: "step_negociacao",
     title: "Nutrivida Alimentos - Sistema de embalagem",
+    contactIds: ["cont_002"],
     contactId: "cont_002",
     sessionId: "sess_003",
     responsibleId: "user_ana",
@@ -468,6 +470,7 @@ export const MOCK_CARDS: CrmCard[] = [
     panelId: "panel_vendas",
     stepId: "step_fechamento",
     title: "Clinica Vitacare - Manutencao anual",
+    contactIds: ["cont_004"],
     contactId: "cont_004",
     sessionId: "sess_007",
     responsibleId: "user_ana",

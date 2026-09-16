@@ -1,10 +1,18 @@
 import "server-only";
 import type { CardStatus } from "@/domain/enums";
-import type { CardNote, CrmCard } from "@/domain/types";
+import type { CardNote, CrmCard, StepPhase } from "@/domain/types";
 import { MOCK_CARDS, findCardByContact } from "@/mocks/dataset";
 import { ENDPOINTS } from "../endpoints";
 import { apiRequest, apiRequestAllPages } from "../http/client";
-import { MappingReport, readDate, readNumber, readString } from "../mappers/tolerant";
+import {
+  MappingReport,
+  readBoolean,
+  readDate,
+  readIdList,
+  readNumber,
+  readRecord,
+  readString,
+} from "../mappers/tolerant";
 import {
   buildIdempotencyKey,
   liveResult,
@@ -24,9 +32,15 @@ import {
  *   GET  /v1/panel/card/{cardId}/note          Listar anotacoes
  *   POST /v1/panel/card/{cardId}/note          Adicionar anotacao
  *
- * PENDENTE DE VALIDACAO (critico): os NOMES DOS CAMPOS do corpo da v3 e
- * como o status WON/LOST e o motivo de perda sao enviados. Por isso as
- * escritas exigem FLW_CARD_WRITE_CONFIRMED=true, alem do modo de automacao.
+ * CONTRATO DE ESCRITA — CONFIRMADO:
+ *   PUT https://api.wts.chat/crm/v3/panel/card/{id}
+ *   O corpo declara em `fields` quais campos mudam. Status aceita
+ *   OPEN | WON | LOST | ARCHIVED, e o motivo de perda vai em `lostReasonId`.
+ *
+ * A trava FLW_CARD_WRITE_CONFIRMED permanece por um unico motivo: os 14
+ * valores do enum `fields` estao ocultos na documentacao publica. A grafia
+ * usada e inferida do texto da pagina. Confirme-a antes de escrever em
+ * producao, ou ajuste FLW_CARD_FIELDS_CASE.
  *
  * REGRA DE NEGOCIO DA API (declarada no briefing):
  *   Cards WON ou LOST NAO podem ser movidos entre etapas. Para mover, e
@@ -42,31 +56,129 @@ function normalizeCardStatus(raw?: string): CardStatus {
   return "OPEN";
 }
 
+/**
+ * Fase da etapa, conforme o enum `stepPhase` do contrato.
+ * Qualquer valor desconhecido cai em NONE (etapa intermediaria).
+ */
+function normalizeStepPhase(raw?: string): StepPhase {
+  const upper = (raw ?? "").toUpperCase();
+  if (upper === "INITIAL") return "INITIAL";
+  if (upper === "FINAL") return "FINAL";
+  return "NONE";
+}
+
+/**
+ * Mapeia o card usando os nomes CONFIRMADOS no contrato de
+ * PUT https://api.wts.chat/crm/v3/panel/card/{id}.
+ *
+ * Tres campos exigiram correcao em relacao ao que este modulo assumia antes:
+ *   contactId       -> contactIds, e uma LISTA (um card liga varios contatos)
+ *   responsibleId   -> responsibleUserId
+ *   amount          -> monetaryAmount
+ *
+ * Os nomes antigos seguem na lista de tentativas apenas para o caso de uma
+ * instancia mais antiga da API; o nome oficial vem sempre primeiro.
+ */
 export function mapCard(raw: unknown, accountId: string, report: MappingReport): CrmCard | null {
-  const id = readString(raw, ["id", "cardId", "uuid"], "card.id", report);
+  const id = readString(raw, ["id", "cardId"], "card.id", report);
   if (!id) return null;
+
+  const contactIds = readIdList(raw, ["contactIds", "contacts"], "card.contactIds", report);
+  const responsibleUser = readRecord(raw, ["responsibleUser"], "card.responsibleUser", report);
+  const lostReason = readRecord(raw, ["lostReason"], "card.lostReason", report);
 
   return {
     id,
     accountId,
-    panelId: readString(raw, ["panelId", "panel_id", "boardId"], "card.panelId", report) ?? "",
-    stepId: readString(raw, ["stepId", "stageId", "columnId", "step_id"], "card.stepId", report) ?? "",
-    title: readString(raw, ["title", "name", "subject"], "card.title", report) ?? "Card sem titulo",
-    contactId: readString(raw, ["contactId", "contact_id"], "card.contactId", report),
-    sessionId: readString(raw, ["sessionId", "session_id", "conversationId"], "card.sessionId", report),
-    responsibleId: readString(
-      raw,
-      ["responsibleId", "userId", "assigneeId", "ownerId"],
-      "card.responsibleId",
-      report,
-    ),
-    amount: readNumber(raw, ["amount", "value", "monetaryValue", "price"], "card.amount", report),
-    description: readString(raw, ["description", "notes", "details"], "card.description", report),
-    dueDate: readDate(raw, ["dueDate", "deadline", "expiresAt"], "card.dueDate", report),
-    status: normalizeCardStatus(readString(raw, ["status", "state", "situation"], "card.status", report)),
-    createdAt: readDate(raw, ["createdAt", "created_at"], "card.createdAt", report) ?? new Date(0).toISOString(),
-    updatedAt: readDate(raw, ["updatedAt", "updated_at"], "card.updatedAt", report) ?? new Date(0).toISOString(),
+    panelId: readString(raw, ["panelId"], "card.panelId", report) ?? "",
+    panelTitle: readString(raw, ["panelTitle"], "card.panelTitle", report),
+    stepId: readString(raw, ["stepId"], "card.stepId", report) ?? "",
+    stepName: readString(raw, ["stepTitle"], "card.stepTitle", report),
+    stepPhase: normalizeStepPhase(readString(raw, ["stepPhase"], "card.stepPhase", report)),
+    title: readString(raw, ["title"], "card.title", report) ?? "Card sem titulo",
+
+    contactIds,
+    contactId: contactIds[0],
+
+    sessionId: readString(raw, ["sessionId"], "card.sessionId", report),
+    responsibleId: readString(raw, ["responsibleUserId"], "card.responsibleUserId", report),
+    responsibleName: responsibleUser
+      ? readString(responsibleUser, ["name"], "card.responsibleUser.name")
+      : undefined,
+
+    amount: readNumber(raw, ["monetaryAmount"], "card.monetaryAmount", report),
+    description: readString(raw, ["description"], "card.description", report),
+    dueDate: readDate(raw, ["dueDate"], "card.dueDate", report),
+    isOverdue: readBoolean(raw, ["isOverdue"], "card.isOverdue", report),
+
+    status: normalizeCardStatus(readString(raw, ["status"], "card.status", report)),
+    lostReasonId: lostReason ? readString(lostReason, ["id"], "card.lostReason.id") : undefined,
+    lostReasonName: lostReason ? readString(lostReason, ["name"], "card.lostReason.name") : undefined,
+
+    createdAt: readDate(raw, ["createdAt"], "card.createdAt", report) ?? new Date(0).toISOString(),
+    updatedAt: readDate(raw, ["updatedAt"], "card.updatedAt", report) ?? new Date(0).toISOString(),
   };
+}
+
+/**
+ * Campos que PUT /crm/v3/panel/card/{id} aceita em `fields`.
+ *
+ * A v3 nao infere o que mudou pelo corpo: e preciso DECLARAR quais campos
+ * estao sendo atualizados. Isso e uma protecao — sem a declaracao, um campo
+ * ausente poderia ser interpretado como "apagar".
+ *
+ * PENDENTE DE VALIDACAO: a documentacao lista 14 valores de enum sob
+ * "Show 14 enum values", que nao estao visiveis na pagina publica. A grafia
+ * PascalCase abaixo segue a convencao usada no proprio texto da documentacao
+ * ("Este campo sera ignorado caso `TagIds` seja definido"). Se a API recusar,
+ * ajuste FLW_CARD_FIELDS_CASE para "camel".
+ */
+const CAMPOS_DE_CARD = [
+  "StepId",
+  "Title",
+  "Description",
+  "Position",
+  "DueDate",
+  "ResponsibleUserId",
+  "TagIds",
+  "TagNames",
+  "ContactIds",
+  "SessionId",
+  "MonetaryAmount",
+  "Status",
+  "LostReasonId",
+  "CustomFields",
+] as const;
+
+export type CampoDeCard = (typeof CAMPOS_DE_CARD)[number];
+
+/** Nome da propriedade correspondente no corpo da requisicao. */
+const CAMPO_PARA_PROPRIEDADE: Record<CampoDeCard, string> = {
+  StepId: "stepId",
+  Title: "title",
+  Description: "description",
+  Position: "position",
+  DueDate: "dueDate",
+  ResponsibleUserId: "responsibleUserId",
+  TagIds: "tagIds",
+  TagNames: "tagNames",
+  ContactIds: "contactIds",
+  SessionId: "sessionId",
+  MonetaryAmount: "monetaryAmount",
+  Status: "status",
+  LostReasonId: "lostReasonId",
+  CustomFields: "customFields",
+};
+
+/**
+ * Aplica a grafia esperada pela API ao nome do campo.
+ * Enquanto os valores exatos do enum nao forem confirmados, a grafia e
+ * configuravel para permitir correcao sem alterar codigo.
+ */
+function grafiaDoCampo(campo: CampoDeCard): string {
+  return process.env.FLW_CARD_FIELDS_CASE === "camel"
+    ? CAMPO_PARA_PROPRIEDADE[campo]
+    : campo;
 }
 
 /** Erro de regra de negocio, distinto de erro de transporte. */
@@ -101,9 +213,10 @@ function cardWritesConfirmed(): boolean {
 }
 
 const WRITE_BLOCKED_REASON =
-  "Escrita de card bloqueada: os nomes dos campos do corpo de PUT /v3/panel/card/{id} " +
-  "ainda nao foram confirmados na documentacao. Apos confirmar, defina " +
-  "FLW_CARD_WRITE_CONFIRMED=true e ajuste o mapper de escrita.";
+  "Escrita de card ainda nao liberada. O contrato de PUT /crm/v3/panel/card/{id} " +
+  "esta confirmado, mas os 14 valores do enum `fields` nao aparecem na " +
+  "documentacao publica e a grafia usada e inferida. Confirme o enum e defina " +
+  "FLW_CARD_WRITE_CONFIRMED=true.";
 
 export interface CreateCardInput {
   accountId: string;
@@ -130,7 +243,8 @@ export interface UpdateCardInput {
   description?: string;
   dueDate?: string;
   status?: CardStatus;
-  lossReasonId?: string;
+  /** API: `lostReasonId`. */
+  lostReasonId?: string;
   dryRun: boolean;
 }
 
@@ -192,6 +306,7 @@ export const cardsAdapter = {
         panelId: input.panelId,
         stepId: input.stepId,
         title: input.title,
+        contactIds: input.contactId ? [input.contactId] : [],
         contactId: input.contactId,
         sessionId: input.sessionId,
         responsibleId: input.responsibleId,
@@ -215,10 +330,11 @@ export const cardsAdapter = {
         panelId: input.panelId,
         stepId: input.stepId,
         title: input.title,
-        contactId: input.contactId,
+        // Nomes oficiais: lista de contatos, responsibleUserId, monetaryAmount.
+        contactIds: input.contactId ? [input.contactId] : undefined,
         sessionId: input.sessionId,
-        responsibleId: input.responsibleId,
-        amount: input.amount,
+        responsibleUserId: input.responsibleId,
+        monetaryAmount: input.amount,
         description: input.description,
         dueDate: input.dueDate,
       },
@@ -258,25 +374,42 @@ export const cardsAdapter = {
       return { data: null, source: "live", pendingValidation: [WRITE_BLOCKED_REASON, ...contract.pending] };
     }
 
+    /*
+     * A v3 exige declarar quais campos estao sendo atualizados. Montamos a
+     * lista a partir do que o chamador realmente informou: um campo que ele
+     * nao pediu para mudar nunca entra em `fields`, e portanto nunca e tocado.
+     */
+    const alteracoes: { campo: CampoDeCard; valor: unknown }[] = [];
+
+    if (input.stepId !== undefined) alteracoes.push({ campo: "StepId", valor: input.stepId });
+    if (input.responsibleId !== undefined) alteracoes.push({ campo: "ResponsibleUserId", valor: input.responsibleId });
+    if (input.amount !== undefined) alteracoes.push({ campo: "MonetaryAmount", valor: input.amount });
+    if (input.description !== undefined) alteracoes.push({ campo: "Description", valor: input.description });
+    if (input.dueDate !== undefined) alteracoes.push({ campo: "DueDate", valor: input.dueDate });
+    if (input.status !== undefined) alteracoes.push({ campo: "Status", valor: input.status });
+    if (input.lostReasonId !== undefined) alteracoes.push({ campo: "LostReasonId", valor: input.lostReasonId });
+
+    // Nada a fazer: devolvemos o card como esta, sem gastar uma chamada.
+    if (alteracoes.length === 0) {
+      return { data: input.current, source: "live", pendingValidation: [] };
+    }
+
+    const corpo: Record<string, unknown> = {
+      fields: alteracoes.map((a) => grafiaDoCampo(a.campo)),
+    };
+    for (const { campo, valor } of alteracoes) {
+      corpo[CAMPO_PARA_PROPRIEDADE[campo]] = valor;
+    }
+
     const report = new MappingReport();
     const response = await apiRequest<unknown>(contract, {
       pathParams: { id: input.cardId },
-      body: {
-        stepId: input.stepId,
-        responsibleId: input.responsibleId,
-        amount: input.amount,
-        description: input.description,
-        dueDate: input.dueDate,
-        status: input.status,
-        lossReasonId: input.lossReasonId,
-      },
+      body: corpo,
       idempotencyKey: buildIdempotencyKey({
         accountId: input.accountId,
         actionType: "ATUALIZAR_CARD",
         targetId: input.cardId,
-        discriminator: JSON.stringify({
-          s: input.stepId, r: input.responsibleId, a: input.amount, st: input.status,
-        }),
+        discriminator: JSON.stringify(corpo),
       }),
     });
 

@@ -17,6 +17,8 @@ import {
   OPERACAO_DE_ETIQUETAS,
   TAG_OPERATIONS,
 } from "@/server/integration/adapters/contacts.adapter";
+import { mapCard } from "@/server/integration/adapters/cards.adapter";
+import { MappingReport } from "@/server/integration/mappers/tolerant";
 
 /**
  * Testes da taxonomia de etiquetas e do registry de endpoints.
@@ -319,5 +321,93 @@ describe("grupos de servico", () => {
     assert.equal(ENDPOINTS.CARDS.LIST.group, "crm");
     assert.equal(ENDPOINTS.CARDS.UPDATE.group, "crm");
     assert.equal(ENDPOINTS.CARD_NOTES.CREATE.group, "crm");
+  });
+});
+
+/* ==========================================================================
+   Contrato de card — nomes que eu havia errado
+   ==========================================================================
+   Os quatro campos abaixo foram assumidos errado antes da documentação chegar.
+   Em modo real isso traria cards sem contato, sem responsável e sem valor —
+   e o indicador "Valor potencial estimado" mostraria zero.
+   ========================================================================== */
+describe("mapeamento de card", () => {
+  const cardDaApi = {
+    id: "c1",
+    panelId: "p1",
+    panelTitle: "Funil de Vendas",
+    stepId: "s1",
+    stepTitle: "Proposta Quente",
+    stepPhase: "NONE",
+    title: "Oportunidade",
+    // Os nomes que a API realmente usa:
+    contactIds: ["ct1", "ct2"],
+    responsibleUserId: "u1",
+    responsibleUser: { id: "u1", name: "Ana Ribeiro" },
+    monetaryAmount: 96400,
+    sessionId: "sess1",
+    dueDate: "2026-10-01T12:00:00Z",
+    isOverdue: false,
+    status: "OPEN",
+    createdAt: "2026-09-01T12:00:00Z",
+    updatedAt: "2026-09-10T12:00:00Z",
+  };
+
+  it("le a lista de contatos, nao um contato unico", () => {
+    const card = mapCard(cardDaApi, "acc1", new MappingReport());
+    assert.deepEqual(card?.contactIds, ["ct1", "ct2"]);
+    assert.equal(card?.contactId, "ct1", "o atalho aponta para o primeiro");
+  });
+
+  it("le o responsavel de responsibleUserId", () => {
+    const card = mapCard(cardDaApi, "acc1", new MappingReport());
+    assert.equal(card?.responsibleId, "u1");
+    assert.equal(card?.responsibleName, "Ana Ribeiro");
+  });
+
+  it("le o valor de monetaryAmount", () => {
+    const card = mapCard(cardDaApi, "acc1", new MappingReport());
+    assert.equal(card?.amount, 96400, "sem isto, o valor do funil seria zero");
+  });
+
+  it("le a fase da etapa", () => {
+    const card = mapCard(cardDaApi, "acc1", new MappingReport());
+    assert.equal(card?.stepPhase, "NONE");
+    assert.equal(card?.stepName, "Proposta Quente");
+  });
+
+  it("nao aceita os nomes antigos que eu havia inventado", () => {
+    // Um payload com os nomes errados nao deve preencher nada por acidente.
+    const payloadErrado = {
+      id: "c2",
+      panelId: "p1",
+      stepId: "s1",
+      title: "x",
+      contactId: "ct9",
+      responsibleId: "u9",
+      amount: 1234,
+      status: "OPEN",
+    };
+    const card = mapCard(payloadErrado, "acc1", new MappingReport());
+
+    assert.deepEqual(card?.contactIds, []);
+    assert.equal(card?.responsibleId, undefined);
+    assert.equal(card?.amount, undefined);
+  });
+
+  it("le o motivo de perda quando o card esta perdido", () => {
+    const perdido = {
+      ...cardDaApi,
+      status: "LOST",
+      lostReason: { id: "lr1", name: "Fechou com concorrente" },
+    };
+    const card = mapCard(perdido, "acc1", new MappingReport());
+    assert.equal(card?.status, "LOST");
+    assert.equal(card?.lostReasonId, "lr1");
+    assert.equal(card?.lostReasonName, "Fechou com concorrente");
+  });
+
+  it("descarta card sem id em vez de fabricar um", () => {
+    assert.equal(mapCard({ title: "sem id" }, "acc1", new MappingReport()), null);
   });
 });

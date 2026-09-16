@@ -15,7 +15,7 @@ Esta é a **primeira entrega**. O que está e o que não está funcionando:
 
 | | Situação |
 |---|---|
-| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 164 testes automatizados** |
+| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 171 testes automatizados** |
 | ✅ Autenticação da API (`Authorization: Bearer pn_...`) | **Confirmada na documentação oficial** |
 | ✅ Caminhos dos endpoints de leitura | **Extraídos do índice oficial da documentação** |
 | 🟡 Dados exibidos | **Simulados.** Nenhuma chamada real à API foi feita ou testada |
@@ -40,7 +40,7 @@ Abra <http://localhost:3000> — a página inicial lista as rotas com a conta de
 Outros comandos:
 
 ```bash
-npm test                # 164 testes automatizados (~1s)
+npm test                # 171 testes automatizados (~1s)
 npm run verify          # typecheck + lint + testes + build — rode antes de publicar
 npm run build           # build de produção
 npm run typecheck       # checagem de tipos
@@ -127,9 +127,11 @@ mensagem, e todo o grupo de contatos — incluindo etiquetas.
    citados textualmente na documentação. *Abra a página de cada endpoint (acrescente
    `.md` à URL) e confirme.*
 
-2. **Contratos críticos de escrita** — bloqueiam a execução real:
-   - `PUT /v3/panel/card/{id}` — nomes dos campos do corpo, e como `WON`/`LOST` e o
-     motivo de perda são enviados. Libere com `FLW_CARD_WRITE_CONFIRMED=true`.
+2. **Contratos críticos de escrita:**
+   - ~~`PUT /v3/panel/card/{id}`~~ — **contrato confirmado.** O corpo declara em
+     `fields` quais campos mudam; `status` aceita `OPEN`/`WON`/`LOST`/`ARCHIVED`
+     e o motivo de perda vai em `lostReasonId`. Resta apenas confirmar os 14
+     valores do enum `fields`, ocultos na documentação pública.
    - ~~`POST /v1/contact/{id}/tags`~~ — **resolvido.** A API tem um campo
      `operation` explícito: `InsertIfNotExists`, `DeleteIfExists` ou
      `ReplaceAll`. O módulo usa exclusivamente **`InsertIfNotExists`**, que
@@ -269,7 +271,7 @@ psql -d flowi_local -f db/migrations/0002_supabase.sql
 npm test
 ```
 
-164 testes em 5 suítes, focados no que causa dano real se quebrar:
+171 testes em 5 suítes, focados no que causa dano real se quebrar:
 
 | Suíte | O que protege |
 |---|---|
@@ -334,7 +336,7 @@ src/
     └── services/              Oportunidades, automação, etiquetas,
                                auditoria, chat, qualidade, fila
 db/migrations/                 0001 esquema · 0002 ajustes do Supabase
-tests/                         164 testes automatizados
+tests/                         171 testes automatizados
 ```
 
 ### Score (0–100)
