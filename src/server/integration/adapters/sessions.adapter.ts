@@ -3,7 +3,7 @@ import type { Channel } from "@/domain/enums";
 import type { ConversationSnapshot } from "@/domain/types";
 import { MOCK_CONVERSATIONS, findConversation } from "@/mocks/dataset";
 import { ENDPOINTS } from "../endpoints";
-import { apiRequest, apiRequestAllPages } from "../http/client";
+import { apiRequest } from "../http/client";
 import {
   MappingReport,
   readDate,
@@ -139,14 +139,81 @@ export const sessionsAdapter = {
     }
 
     const report = new MappingReport();
-    const raw = await apiRequestAllPages<unknown>(
-      ENDPOINTS.SESSIONS.LIST,
-      { query: { updatedAfter: params.updatedAfter } },
-      {},
-      params.maxPages ?? 10,
-    );
 
-    const sessions = raw
+    /*
+     * LE DE TRAS PARA FRENTE — e este e o ponto do metodo.
+     *
+     * A API entrega a listagem da conversa MAIS ANTIGA para a mais nova
+     * (confirmado pela sonda: a pagina 60 traz 23/10 enquanto a pagina 1 traz
+     * 15/10). Ler as primeiras paginas significa ler o comeco da historia da
+     * conta.
+     *
+     * Nesta conta sao 22.213 conversas. Lendo 10 paginas pela frente, o
+     * modulo via 500 — as 500 MAIS VELHAS, de outubro de 2025 — e nunca
+     * enxergava nada recente. Toda analise que ele produzia era arqueologia:
+     * oportunidades de 11 meses atras, "clientes sem retorno" que ja tinham
+     * sido respondidos, cards "parados" havia quase um ano.
+     *
+     * Nenhum parametro de ordenacao ou de filtro por data teve efeito (doze
+     * candidatos testados), entao a saida e a que o proprio envelope permite:
+     * ele informa `totalPages`, e dai da para caminhar do fim para o comeco.
+     *
+     * A varredura para assim que uma pagina inteira fica antes do corte —
+     * como a ordem e crescente, tudo que vem antes e ainda mais antigo.
+     */
+    const corte = params.updatedAfter ? Date.parse(params.updatedAfter) : undefined;
+    const tamanhoDaPagina = 50;
+    const maxPaginas = params.maxPages ?? 20;
+
+    const primeira = await apiRequest<unknown>(ENDPOINTS.SESSIONS.LIST, {
+      query: { pageNumber: 1, pageSize: tamanhoDaPagina },
+    });
+
+    const envelope = (primeira.data ?? {}) as Record<string, unknown>;
+    const totalPaginas =
+      typeof envelope["totalPages"] === "number" ? envelope["totalPages"] : 1;
+
+    const coletadas: unknown[] = [];
+    let paginasLidas = 0;
+
+    for (
+      let pagina = totalPaginas;
+      pagina >= 1 && paginasLidas < maxPaginas;
+      pagina -= 1
+    ) {
+      const resposta =
+        pagina === 1
+          ? primeira
+          : await apiRequest<unknown>(ENDPOINTS.SESSIONS.LIST, {
+              query: { pageNumber: pagina, pageSize: tamanhoDaPagina },
+            });
+
+      paginasLidas += 1;
+
+      const corpo = (resposta.data ?? {}) as Record<string, unknown>;
+      const itens = Array.isArray(corpo["items"]) ? (corpo["items"] as unknown[]) : [];
+      if (itens.length === 0) continue;
+
+      if (corte === undefined) {
+        coletadas.push(...itens);
+        continue;
+      }
+
+      const dentroDoCorte = itens.filter((item) => {
+        const bruto = item as Record<string, unknown>;
+        const quando = Date.parse(
+          String(bruto["lastInteractionDate"] ?? bruto["updatedAt"] ?? ""),
+        );
+        return Number.isFinite(quando) && quando >= corte;
+      });
+
+      coletadas.push(...dentroDoCorte);
+
+      // Pagina inteira antes do corte: as anteriores sao ainda mais antigas.
+      if (dentroDoCorte.length === 0) break;
+    }
+
+    const sessions = coletadas
       .map((item) => mapSession(item, params.accountId, report))
       .filter((s): s is ConversationSnapshot => s !== null);
 

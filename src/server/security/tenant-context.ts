@@ -41,7 +41,7 @@ export const baseParamsSchema = z.object({
 
 export const periodSchema = z
   .object({
-    preset: z.enum(["7d", "15d", "30d", "90d", "custom"]).default("30d"),
+    preset: z.enum(["3d", "7d", "15d", "30d", "90d", "custom"]).default("3d"),
     from: isoDateSchema.optional(),
     to: isoDateSchema.optional(),
   })
@@ -53,7 +53,7 @@ export const periodSchema = z
 export const filtersSchema = z.object({
   accountId: idSchema,
   userId: idSchema,
-  preset: z.enum(["7d", "15d", "30d", "90d", "custom"]).optional(),
+  preset: z.enum(["3d", "7d", "15d", "30d", "90d", "custom"]).optional(),
   from: isoDateSchema.optional(),
   to: isoDateSchema.optional(),
   teamId: idSchema.optional(),
@@ -79,17 +79,32 @@ export function resolvePeriod(params: {
   now?: Date;
 }): PeriodFilter {
   const now = params.now ?? new Date();
-  const preset = (params.preset ?? "30d") as PeriodFilter["preset"];
+  /*
+   * Tres dias por padrao.
+   *
+   * A API nao aceita filtro de data e entrega a listagem da conversa mais
+   * ANTIGA para a mais nova, com 22 mil conversas nesta conta. Cada dia a
+   * mais no recorte custa paginas lidas de tras para frente. Tres dias e a
+   * janela em que uma oportunidade ainda esta quente e cabe inteira no
+   * orcamento de tempo — periodos maiores continuam disponiveis, so custam
+   * mais.
+   */
+  const preset = (params.preset ?? "3d") as PeriodFilter["preset"];
 
   if (preset === "custom" && params.from && params.to) {
     return { preset: "custom", from: params.from, to: params.to };
   }
 
-  const days = preset === "7d" ? 7 : preset === "15d" ? 15 : preset === "90d" ? 90 : 30;
+  const days =
+    preset === "3d" ? 3
+    : preset === "7d" ? 7
+    : preset === "15d" ? 15
+    : preset === "90d" ? 90
+    : 30;
   const from = new Date(now.getTime() - days * 24 * 36e5);
 
   return {
-    preset: preset === "custom" ? "30d" : preset,
+    preset: preset === "custom" ? "3d" : preset,
     from: from.toISOString(),
     to: now.toISOString(),
   };

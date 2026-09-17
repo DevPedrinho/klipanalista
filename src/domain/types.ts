@@ -65,7 +65,7 @@ export interface Team {
    Filtros
    ========================================================================== */
 
-export type PeriodPreset = "7d" | "15d" | "30d" | "90d" | "custom";
+export type PeriodPreset = "3d" | "7d" | "15d" | "30d" | "90d" | "custom";
 
 export interface PeriodFilter {
   preset: PeriodPreset;

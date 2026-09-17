@@ -375,6 +375,22 @@ async function abrirConversa(sessionId: string) {
     contatoId: bruto["contactId"] ?? null,
   };
 
+  /*
+   * Mensagem de AUDIO crua, para localizar a transcricao.
+   *
+   * A KlipFlowi mostra "Transcricao" na tela do atendimento, entao o texto
+   * existe em algum lugar do payload. O modulo hoje le so `text`, que vem
+   * vazio em audio — e como 12 das 20 mensagens desta conversa sao audio, o
+   * miolo da negociacao fica invisivel para a analise.
+   *
+   * Este bloco devolve o objeto inteiro de um audio para descobrir onde o
+   * texto esta (`details` e o candidato mais provavel).
+   */
+  const audioCru = (mensagens.itens ?? []).find((item) => {
+    const m = item as Record<string, unknown>;
+    return m["type"] === "AUDIO";
+  });
+
   const falas = (mensagens.itens ?? []).map((item) => {
     const m = item as Record<string, unknown>;
     const texto = typeof m["text"] === "string" ? m["text"] : "";
@@ -414,6 +430,15 @@ async function abrirConversa(sessionId: string) {
 
   return {
     conversa,
+    audioCru: audioCru
+      ? {
+          campos: nomesDosCampos(audioCru),
+          // O objeto inteiro, mascarado: e onde a transcricao deve estar.
+          objeto: JSON.parse(
+            mascararContato(JSON.stringify(audioCru)),
+          ) as unknown,
+        }
+      : null,
     totalDeMensagens: falas.length,
     falas,
     diagnostico: {

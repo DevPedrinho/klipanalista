@@ -231,14 +231,41 @@ describe("resolvePeriod", () => {
     }
   });
 
-  it("usa 30 dias como padrao", () => {
+  /**
+   * Tres dias, e nao trinta.
+   *
+   * A API nao aceita filtro de data e entrega a listagem da conversa mais
+   * ANTIGA para a mais nova — 22 mil conversas nesta conta. Cada dia a mais
+   * no recorte custa paginas lidas de tras para frente, entao o padrao e a
+   * janela em que uma oportunidade ainda esta quente.
+   */
+  it("usa 3 dias como padrao", () => {
     const p = resolvePeriod({ now });
-    assert.equal(p.preset, "30d");
+    assert.equal(p.preset, "3d");
+
+    const dias = (Date.parse(p.to) - Date.parse(p.from)) / 864e5;
+    assert.ok(Math.abs(dias - 3) < 0.01, `a janela precisa ter 3 dias, tem ${dias}`);
   });
 
   it("recai no padrao quando custom vem sem datas", () => {
     const p = resolvePeriod({ preset: "custom", now });
-    assert.equal(p.preset, "30d");
+    assert.equal(p.preset, "3d");
+  });
+
+  it("continua aceitando os periodos maiores quando pedidos", () => {
+    for (const [preset, esperado] of [
+      ["7d", 7],
+      ["15d", 15],
+      ["30d", 30],
+      ["90d", 90],
+    ] as [string, number][]) {
+      const p = resolvePeriod({ preset, now });
+      const dias = (Date.parse(p.to) - Date.parse(p.from)) / 864e5;
+      assert.ok(
+        Math.abs(dias - esperado) < 0.01,
+        `${preset} deveria cobrir ${esperado} dias, cobriu ${dias}`,
+      );
+    }
   });
 });
 
