@@ -332,6 +332,74 @@ async function medirOrdemDasConversas() {
 }
 
 /**
+ * Procura de onde vem o NOME das etapas do funil.
+ *
+ * Medido contra a conta real: `/v2/panel` e `/v1/panel/{id}` devolvem
+ * `steps: null` e `stepTitles: null`, e o campo `stepTitle` dos cards tambem
+ * chega nulo. O resultado e um funil inteiro rotulado "Etapa sem nome" —
+ * legivel para a maquina, inutil para quem precisa reconhecer o proprio
+ * processo comercial. A Central da KlipFlowi mostra os nomes, entao eles
+ * existem em algum endpoint que o modulo ainda nao conhece.
+ *
+ * Este modo tenta os candidatos e diz qual responde. Nao supoe nenhum: cada
+ * tentativa aparece com o status HTTP e os campos do primeiro item, e a
+ * conclusao fica visivel em vez de escondida numa suposicao de codigo.
+ */
+async function procurarEtapas(panelId: string) {
+  const candidatos: { path: string; group: "core" | "chat" | "crm"; query?: Record<string, string> }[] = [
+    { path: "/v1/panel/{id}/step", group: "crm" },
+    { path: "/v2/panel/{id}/step", group: "crm" },
+    { path: "/v1/panel/{id}/steps", group: "crm" },
+    { path: "/v1/panel/step", group: "crm", query: { panelId } },
+    { path: "/v2/panel/step", group: "crm", query: { panelId } },
+    { path: "/v1/panel/{id}/stage", group: "crm" },
+  ];
+
+  const tentativas = await Promise.all(
+    candidatos.map(async (candidato) => {
+      const contrato: EndpointContract = {
+        key: "SONDA_ETAPAS",
+        method: "GET",
+        path: candidato.path,
+        group: candidato.group,
+        trust: "PENDING_VALIDATION",
+        pending: ["Caminho candidato: existe apenas nesta sonda."],
+        summary: "Tentativa de descobrir as etapas do painel.",
+      };
+
+      const sondagem = await sondar(contrato, {
+        pathParams: { id: panelId },
+        ...(candidato.query ? { query: candidato.query } : {}),
+      });
+
+      const primeiro = (sondagem.itens ?? [])[0] as Record<string, unknown> | undefined;
+
+      return {
+        caminho: candidato.path,
+        ok: sondagem.resultado.ok,
+        httpStatus: sondagem.resultado.httpStatus,
+        quantidade: sondagem.resultado.count ?? null,
+        campos: sondagem.resultado.campos ?? null,
+        // O que importa e se ha um nome legivel: e essa a pergunta.
+        exemploDeNome: primeiro
+          ? (primeiro["title"] ?? primeiro["name"] ?? primeiro["description"] ?? null)
+          : null,
+      };
+    }),
+  );
+
+  const venceu = tentativas.find((t) => t.ok && (t.quantidade ?? 0) > 0 && t.exemploDeNome);
+
+  return {
+    painel: panelId,
+    tentativas,
+    conclusao: venceu
+      ? "As etapas vem de " + venceu.caminho + "."
+      : "Nenhum candidato devolveu etapas nomeadas. O nome pode nao estar exposto na API.",
+  };
+}
+
+/**
  * Abre UMA conversa pelo id e mostra o que aconteceu nela.
  *
  * Diferente do resto desta rota, este modo devolve CONTEUDO — e por isso
@@ -527,6 +595,14 @@ export async function GET(request: NextRequest) {
   if (conversaPedida && /^[A-Za-z0-9_-]{1,128}$/.test(conversaPedida)) {
     return ok(
       { executado: true, modo: "sessao", ...(await abrirConversa(conversaPedida)) },
+      { dataMode: readiness.dataMode },
+    );
+  }
+
+  const painelPedido = request.nextUrl.searchParams.get("etapas");
+  if (painelPedido && /^[A-Za-z0-9_-]{1,128}$/.test(painelPedido)) {
+    return ok(
+      { executado: true, modo: "etapas", ...(await procurarEtapas(painelPedido)) },
       { dataMode: readiness.dataMode },
     );
   }

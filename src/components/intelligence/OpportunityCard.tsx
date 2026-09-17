@@ -220,16 +220,35 @@ export function OpportunityCard({
               {TAG_LABELS[key] ?? key}
             </Badge>
           ))}
-          {o.objections.map((objection) => (
-            <Badge
-              key={objection}
-              className="bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-200 dark:ring-rose-900"
-              title="Objeção identificada na conversa"
-            >
-              {objection}
-            </Badge>
-          ))}
         </div>
+
+        {/*
+          Objeções em bloco próprio, não em etiqueta.
+
+          Uma etiqueta é um rótulo curto; uma objeção é a frase do cliente,
+          como "infelizmente, no momento, eu não vou ter condição financeira
+          de comprar essa máquina". Espremida num chip ao lado de rótulos de
+          duas palavras, ela quebra a linha, desalinha a fileira e fica
+          ilegível — e é justamente a informação que o vendedor precisa ler
+          antes de responder.
+        */}
+        {o.objections.length > 0 ? (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+              Objeções que o cliente levantou
+            </p>
+            <ul className="mt-1.5 space-y-1.5">
+              {o.objections.map((objection) => (
+                <li
+                  key={objection}
+                  className="border-l-2 border-rose-300 pl-2.5 text-xs leading-relaxed text-text-secondary dark:border-rose-800"
+                >
+                  &ldquo;{objection}&rdquo;
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {/* ---------------- Análise completa ---------------- */}
         <button
