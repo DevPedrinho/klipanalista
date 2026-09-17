@@ -1,4 +1,12 @@
+import { type NextRequest } from "next/server";
 import { getEnv, getIntegrationReadiness } from "@/server/config/env";
+import {
+  agentsAdapter,
+  contactsAdapter,
+  panelsAdapter,
+  sessionsAdapter,
+  tagsAdapter,
+} from "@/server/integration/adapters";
 import { ENDPOINTS, type EndpointContract } from "@/server/integration/endpoints";
 import { ApiError, apiRequest } from "@/server/integration/http/client";
 import { ok } from "@/server/http/respond";
@@ -138,7 +146,54 @@ function abreviarNome(valor: unknown): string | undefined {
   return ultimo ? `${primeiro} ${ultimo.charAt(0)}.` : primeiro;
 }
 
-export async function GET() {
+/**
+ * Mede quanto tempo cada ADAPTER leva de ponta a ponta.
+ *
+ * A sonda normal mede uma chamada por endpoint. Os adapters fazem mais do
+ * que isso: paginam, buscam detalhe, tentam de novo com backoff. Foi ai que
+ * o tempo da Central se perdeu, e medir uma chamada isolada nao mostrava.
+ *
+ * Cada medicao tem prazo proprio, para que a propria sonda sempre responda.
+ */
+async function medirAdapters(accountId: string, prazoMs: number) {
+  async function medir<T>(
+    nome: string,
+    executar: () => Promise<{ data: T[] }>,
+  ): Promise<{ fonte: string; ms: number; itens?: number; erro?: string }> {
+    const inicio = Date.now();
+
+    const estouro = new Promise<"ESTOUROU">((resolve) =>
+      setTimeout(() => resolve("ESTOUROU"), prazoMs),
+    );
+
+    try {
+      const resultado = await Promise.race([executar(), estouro]);
+
+      if (resultado === "ESTOUROU") {
+        return { fonte: nome, ms: Date.now() - inicio, erro: `passou de ${prazoMs}ms` };
+      }
+      return { fonte: nome, ms: Date.now() - inicio, itens: resultado.data.length };
+    } catch (error) {
+      return {
+        fonte: nome,
+        ms: Date.now() - inicio,
+        erro: (error as Error).message.slice(0, 200),
+      };
+    }
+  }
+
+  // Em sequencia, de proposito: em paralelo os tempos se contaminam pelo
+  // limitador de vazao e nao diriam qual fonte e a lenta.
+  return [
+    await medir("Conversas", () => sessionsAdapter.list({ accountId })),
+    await medir("Contatos", () => contactsAdapter.list({ accountId })),
+    await medir("Paineis", () => panelsAdapter.list({ accountId })),
+    await medir("Usuarios", () => agentsAdapter.list({ accountId })),
+    await medir("Etiquetas", () => tagsAdapter.list({ accountId })),
+  ];
+}
+
+export async function GET(request: NextRequest) {
   const readiness = getIntegrationReadiness();
 
   if (!readiness.ready) {
@@ -156,6 +211,21 @@ export async function GET() {
   }
 
   const env = getEnv();
+
+  /**
+   * `?adapters=1` mede o custo REAL de cada fonte da Central, em vez de uma
+   * chamada isolada por endpoint. E o que responde "por que a pagina demora",
+   * pergunta que a sonda normal nao alcanca.
+   */
+  if (request.nextUrl.searchParams.get("adapters") === "1") {
+    const inicio = Date.now();
+    const fontes = await medirAdapters("klipflowi", 12_000);
+
+    return ok(
+      { executado: true, modo: "adapters", totalMs: Date.now() - inicio, fontes },
+      { dataMode: readiness.dataMode },
+    );
+  }
 
   // Primeira rodada: listagens que nao dependem de nenhum id.
   const primeiraRodada = await Promise.all([
