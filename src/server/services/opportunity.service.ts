@@ -5,6 +5,7 @@ import type {
   ConversationSnapshot,
   CrmCard,
   DetectedSignal,
+  IcpScore,
   IntegrationSettings,
   IntelligenceKpis,
   Opportunity,
@@ -44,6 +45,7 @@ export interface BuildInput {
    * uma encontrada por expressao regular.
    */
   aiAnalysis?: {
+    icp?: IcpScore;
     sinais: DetectedSignal[];
     objecoes: string[];
     resumoDaNecessidade: string;
@@ -610,6 +612,7 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
       hoursWithoutReply,
     }),
     recommendedTagKeys: tagKeys,
+    ...(input.aiAnalysis?.icp ? { icp: input.aiAnalysis.icp } : {}),
     recommendedStepName: recommendStep({ panels, signalCodes, score: scoreResult.score }),
 
     state: "NOVA",

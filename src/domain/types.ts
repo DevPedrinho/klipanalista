@@ -340,6 +340,27 @@ export interface SuggestedAction {
   payloadPreview: Record<string, unknown>;
 }
 
+/** Uma dimensao do ICP, com a evidencia que a sustenta. */
+export interface IcpDimension {
+  chave: string;
+  rotulo: string;
+  nota: number;
+  maximo: number;
+  justificativa: string;
+  /** Trecho REAL da conversa. Ausente quando nada foi dito a respeito. */
+  evidencia?: string;
+  /** true quando o trecho citado nao existia e a nota foi zerada. */
+  evidenciaRejeitada: boolean;
+}
+
+export interface IcpScore {
+  /** 0 a 100. */
+  total: number;
+  faixa: "ALTO" | "MEDIO" | "BAIXO";
+  perfilResumido: string;
+  dimensoes: IcpDimension[];
+}
+
 export interface Opportunity {
   id: string;
   accountId: string;
@@ -383,6 +404,16 @@ export interface Opportunity {
   nextAction: string;
   suggestedFollowUpMessage: string;
   recommendedTagKeys: string[];
+  /**
+   * Aderencia do CLIENTE ao perfil ideal, avaliada pela IA.
+   *
+   * Deliberadamente separada de `score`: uma mede o cliente, a outra mede a
+   * temperatura do negocio. Somar as duas apagaria a informacao que faz o
+   * vendedor escolher entre "ligar agora" e "cultivar para o mes que vem".
+   *
+   * Ausente quando a analise por IA nao rodou nesta conversa.
+   */
+  icp?: IcpScore;
   recommendedStepName?: string;
 
   state: OpportunityState;

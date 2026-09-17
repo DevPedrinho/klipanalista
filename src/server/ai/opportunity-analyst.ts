@@ -60,7 +60,69 @@ const SinalSchema = z.object({
     ),
 });
 
+/**
+ * ICP — perfil de cliente ideal.
+ *
+ * Mede o CLIENTE, nao o negocio. E uma pergunta diferente da que o score de
+ * oportunidade responde:
+ *
+ *   score de oportunidade -> quanto este negocio merece atencao AGORA
+ *   ICP                   -> quanto este cliente se parece com quem compra
+ *
+ * Os dois se separam na pratica o tempo todo. Alguem com ICP alto e prazo
+ * distante nao e urgente, mas vale cultivar. Alguem com ICP baixo pedindo
+ * orcamento hoje e urgente e provavelmente nao fecha. Somar os dois num
+ * numero so apagaria justamente a informacao que faz o vendedor escolher
+ * onde gastar a proxima hora.
+ *
+ * Cada dimensao exige o trecho que a sustenta. `trecho: null` e uma resposta
+ * legitima e significa "a conversa nao falou disso" — que e diferente de
+ * "falou e foi ruim".
+ */
+const DimensaoIcpSchema = z.object({
+  nota: z.number().min(0).describe("Pontos atribuidos, dentro do maximo da dimensao."),
+  justificativa: z.string().describe("Uma frase dizendo por que esta nota."),
+  trecho: z
+    .string()
+    .nullable()
+    .describe(
+      "Trecho LITERAL da conversa que sustenta a nota. null quando a conversa " +
+        "nao trouxe nada sobre esta dimensao — o que e uma resposta valida.",
+    ),
+});
+
+const IcpSchema = z.object({
+  fitDeNecessidade: DimensaoIcpSchema.describe(
+    "0 a 25. O que o cliente procura e o que esta empresa vende? Pedido " +
+      "especifico e compativel pontua alto; duvida generica ou produto de " +
+      "outro ramo pontua baixo.",
+  ),
+  poderDeDecisao: DimensaoIcpSchema.describe(
+    "0 a 20. A pessoa decide a compra? Fala em nome proprio, ja comprou " +
+      "antes, cita orcamento que controla — alto. Precisa consultar terceiro " +
+      "ou e intermediario — baixo.",
+  ),
+  orcamento: DimensaoIcpSchema.describe(
+    "0 a 20. Ha verba e ela cabe? Faixa declarada compativel pontua alto. " +
+      "Restricao explicita ('nao tenho condicao agora') pontua baixo, mas " +
+      "NAO zera se houver data para ter.",
+  ),
+  prazo: DimensaoIcpSchema.describe(
+    "0 a 20. Quando pretende comprar? Data concreta pontua alto; 'algum dia' " +
+      "pontua baixo.",
+  ),
+  engajamento: DimensaoIcpSchema.describe(
+    "0 a 15. O cliente se envolve? Responde, manda dados (CNPJ, " +
+      "especificacoes), faz perguntas — alto. Sumiu apos a primeira " +
+      "mensagem — baixo.",
+  ),
+  perfilResumido: z
+    .string()
+    .describe("Quem e este cliente, em uma frase, nos termos da conversa."),
+});
+
 const AnaliseSchema = z.object({
+  icp: IcpSchema.describe("Aderencia do CLIENTE ao perfil ideal."),
   temSinalComercial: z
     .boolean()
     .describe("Se ha qualquer indicio de intencao de compra nesta conversa."),
@@ -95,7 +157,48 @@ const AnaliseSchema = z.object({
 
 export type AnaliseDaIa = z.infer<typeof AnaliseSchema>;
 
+/** Maximo de pontos de cada dimensao do ICP. Soma 100. */
+export const PESOS_ICP = {
+  fitDeNecessidade: 25,
+  poderDeDecisao: 20,
+  orcamento: 20,
+  prazo: 20,
+  engajamento: 15,
+} as const;
+
+export type DimensaoIcp = keyof typeof PESOS_ICP;
+
+export interface IcpVerificado {
+  /** 0 a 100. */
+  total: number;
+  faixa: "ALTO" | "MEDIO" | "BAIXO";
+  perfilResumido: string;
+  dimensoes: {
+    chave: DimensaoIcp;
+    rotulo: string;
+    nota: number;
+    maximo: number;
+    justificativa: string;
+    /** Trecho REAL da conversa. Ausente quando nada foi dito a respeito. */
+    evidencia?: string;
+    /**
+     * true quando o modelo citou um trecho que nao existe. A nota vai a zero:
+     * uma afirmacao sem lastro nao pode somar pontos.
+     */
+    evidenciaRejeitada: boolean;
+  }[];
+}
+
+export const ROTULOS_ICP: Record<DimensaoIcp, string> = {
+  fitDeNecessidade: "Fit de necessidade",
+  poderDeDecisao: "Poder de decisão",
+  orcamento: "Orçamento",
+  prazo: "Prazo de compra",
+  engajamento: "Engajamento",
+};
+
 export interface ResultadoDaAnalise {
+  icp: IcpVerificado;
   sinais: DetectedSignal[];
   objecoes: string[];
   resumoDaNecessidade: string;
@@ -142,6 +245,27 @@ REGRAS QUE NAO SE NEGOCIAM
 6. Nao julgue pessoas. A analise orienta o proximo passo comercial; ela nao avalia o atendente.
 
 7. Valores: apenas o que estiver escrito. Nao estime, nao extrapole de conversa parecida, nao converta. Se ninguem citou um numero, valorMencionado e null.
+
+ICP — PERFIL DE CLIENTE IDEAL
+
+Alem dos sinais, avalie o CLIENTE em cinco dimensoes. E uma pergunta diferente: nao "quanto este negocio esta quente", e sim "quanto esta pessoa se parece com quem costuma comprar".
+
+Cada dimensao tem um maximo:
+  Fit de necessidade  25   o que ele procura e o que esta empresa vende?
+  Poder de decisao    20   ele decide sozinho?
+  Orcamento           20   tem verba, e ela cabe?
+  Prazo               20   quando pretende comprar?
+  Engajamento         15   responde, manda dados, se envolve?
+
+Regras especificas do ICP:
+
+  a) Cada nota precisa do trecho que a sustenta, como os sinais. Trecho inexistente ZERA a dimensao.
+
+  b) Um trecho nulo e resposta legitima e significa "a conversa nao falou disso". Nao invente um trecho para justificar uma nota — prefira null e nota baixa.
+
+  c) Restricao de orcamento NAO zera a dimensao quando vier com data. "Nao tenho condicao agora, fica para o dia 5" e melhor que silencio: mostra intencao e prazo.
+
+  d) Separe fit de temperatura. Um cliente que descreve exatamente o produto que a empresa vende tem fit ALTO mesmo que va comprar so no mes que vem.
 
 CONTEXTO DE PRIVACIDADE
 Telefones e e-mails chegam mascarados de proposito. Isso e esperado; nao comente a respeito e nao tente reconstrui-los.`;
@@ -278,7 +402,62 @@ export function verificarAnalise(
     });
   }
 
+  /*
+   * ICP verificado dimensao por dimensao.
+   *
+   * A mesma regra dos sinais vale aqui, e pelo mesmo motivo: uma nota alta
+   * com justificativa convincente e trecho inexistente e exatamente o tipo de
+   * coisa que leva um vendedor a priorizar o cliente errado.
+   *
+   * `trecho: null` NAO e rejeicao — e a conversa nao ter falado do assunto,
+   * que e uma observacao legitima e costuma vir com nota baixa. Rejeicao e
+   * citar algo que ninguem disse; ai a nota vai a zero.
+   */
+  const dimensoes: IcpVerificado["dimensoes"] = (
+    Object.keys(PESOS_ICP) as DimensaoIcp[]
+  ).map((chave) => {
+    const bruta = analise.icp[chave];
+    const maximo = PESOS_ICP[chave];
+
+    const ancora = bruta.trecho ? ancorar(bruta.trecho, mensagens) : undefined;
+    const evidenciaRejeitada = Boolean(bruta.trecho) && !ancora;
+
+    const nota = evidenciaRejeitada
+      ? 0
+      : Math.round(Math.min(maximo, Math.max(0, bruta.nota)));
+
+    if (evidenciaRejeitada) {
+      descartados.push({
+        codigo: `ICP:${chave}`,
+        trecho: bruta.trecho ?? "",
+        motivo: "trecho nao encontrado na conversa",
+      });
+    }
+
+    return {
+      chave,
+      rotulo: ROTULOS_ICP[chave],
+      nota,
+      maximo,
+      justificativa: evidenciaRejeitada
+        ? "A justificativa citava um trecho que nao existe na conversa; a nota foi zerada."
+        : bruta.justificativa,
+      ...(ancora ? { evidencia: ancora.texto.slice(0, 280) } : {}),
+      evidenciaRejeitada,
+    };
+  });
+
+  const totalIcp = dimensoes.reduce((acc, d) => acc + d.nota, 0);
+
+  const icp: IcpVerificado = {
+    total: totalIcp,
+    faixa: totalIcp >= 70 ? "ALTO" : totalIcp >= 40 ? "MEDIO" : "BAIXO",
+    perfilResumido: analise.icp.perfilResumido,
+    dimensoes,
+  };
+
   return {
+    icp,
     sinais,
     objecoes: analise.objecoes,
     resumoDaNecessidade: analise.resumoDaNecessidade,

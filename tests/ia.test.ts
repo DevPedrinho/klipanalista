@@ -44,8 +44,21 @@ function conversa(mensagens: MessageSnapshot[]): ConversationSnapshot {
 }
 
 /** Molde de resposta do modelo, para variar só o que o teste investiga. */
+/** Dimensão de ICP neutra, para os testes que não investigam ICP. */
+function dimensao(over: Partial<AnaliseDaIa["icp"]["orcamento"]> = {}) {
+  return { nota: 0, justificativa: "não avaliado neste teste", trecho: null, ...over };
+}
+
 function analise(over: Partial<AnaliseDaIa> = {}): AnaliseDaIa {
   return {
+    icp: {
+      fitDeNecessidade: dimensao(),
+      poderDeDecisao: dimensao(),
+      orcamento: dimensao(),
+      prazo: dimensao(),
+      engajamento: dimensao(),
+      perfilResumido: "cliente de teste",
+    },
     temSinalComercial: true,
     resumoDaNecessidade: "Cliente quer comprar.",
     produtoDeInteresse: null,
@@ -276,5 +289,158 @@ describe("mascaramento antes de sair do servidor", () => {
     );
 
     assert.equal(preparadas.length, 1, "mensagem de mídia sem texto não vira chamada");
+  });
+});
+
+describe("ICP — perfil de cliente ideal", () => {
+  /**
+   * O ICP responde uma pergunta diferente do score de oportunidade:
+   *
+   *   score de oportunidade -> quanto este negócio merece atenção AGORA
+   *   ICP                   -> quanto este cliente se parece com quem compra
+   *
+   * Os dois se separam na prática o tempo todo, e é essa separação que faz o
+   * vendedor escolher onde gastar a próxima hora.
+   */
+  it("soma as dimensões e classifica a faixa", () => {
+    const resultado = verificarAnalise(
+      analise({
+        icp: {
+          fitDeNecessidade: dimensao({
+            nota: 25,
+            trecho: "preciso de 200 metros de cabo flexível",
+          }),
+          poderDeDecisao: dimensao({
+            nota: 20,
+            trecho: "O orçamento já foi aprovado aqui pela diretoria",
+          }),
+          orcamento: dimensao({ nota: 20, trecho: "orcamento ja foi aprovado" }),
+          prazo: dimensao({ nota: 10, trecho: null }),
+          engajamento: dimensao({ nota: 10, trecho: null }),
+          perfilResumido: "Comprador industrial com verba aprovada.",
+        },
+      }),
+      PREPARADAS,
+    );
+
+    assert.equal(resultado.icp.total, 85);
+    assert.equal(resultado.icp.faixa, "ALTO");
+  });
+
+  /**
+   * A regra que dá confiança ao número: uma nota alta com justificativa
+   * convincente e trecho inexistente é exatamente o que leva um vendedor a
+   * priorizar o cliente errado.
+   */
+  it("ZERA a dimensão cujo trecho não existe na conversa", () => {
+    const resultado = verificarAnalise(
+      analise({
+        icp: {
+          fitDeNecessidade: dimensao({
+            nota: 25,
+            justificativa: "Cliente detalhou exatamente o produto.",
+            trecho: "quero fechar 500 unidades ainda hoje",
+          }),
+          poderDeDecisao: dimensao(),
+          orcamento: dimensao(),
+          prazo: dimensao(),
+          engajamento: dimensao(),
+          perfilResumido: "x",
+        },
+      }),
+      PREPARADAS,
+    );
+
+    const fit = resultado.icp.dimensoes.find((d) => d.chave === "fitDeNecessidade");
+    assert.equal(fit?.nota, 0, "afirmação sem lastro não pode somar pontos");
+    assert.equal(fit?.evidenciaRejeitada, true);
+    assert.equal(resultado.icp.total, 0);
+    assert.ok(resultado.descartados.some((d) => d.codigo === "ICP:fitDeNecessidade"));
+  });
+
+  /**
+   * Distinção que importa: "a conversa não falou disso" é uma observação
+   * legítima; "citei algo que ninguém disse" é invenção. Confundir as duas
+   * faria o módulo punir o silêncio como se fosse mentira.
+   */
+  it("trecho nulo não é rejeição — é a conversa não ter falado do assunto", () => {
+    const resultado = verificarAnalise(
+      analise({
+        icp: {
+          fitDeNecessidade: dimensao({ nota: 0, trecho: null }),
+          poderDeDecisao: dimensao({ nota: 0, trecho: null }),
+          orcamento: dimensao({ nota: 5, trecho: null }),
+          prazo: dimensao({ nota: 0, trecho: null }),
+          engajamento: dimensao({ nota: 0, trecho: null }),
+          perfilResumido: "x",
+        },
+      }),
+      PREPARADAS,
+    );
+
+    assert.equal(resultado.icp.total, 5, "nota sem trecho continua valendo");
+    assert.ok(
+      resultado.icp.dimensoes.every((d) => d.evidenciaRejeitada === false),
+      "silêncio não é invenção",
+    );
+    assert.deepEqual(resultado.descartados, []);
+  });
+
+  it("limita a nota ao máximo da dimensão", () => {
+    const resultado = verificarAnalise(
+      analise({
+        icp: {
+          // 999 no fit, cujo máximo é 25.
+          fitDeNecessidade: dimensao({
+            nota: 999,
+            trecho: "preciso de 200 metros de cabo flexível",
+          }),
+          poderDeDecisao: dimensao(),
+          orcamento: dimensao(),
+          prazo: dimensao(),
+          engajamento: dimensao(),
+          perfilResumido: "x",
+        },
+      }),
+      PREPARADAS,
+    );
+
+    assert.equal(resultado.icp.total, 25);
+  });
+
+  it("classifica as três faixas pelos cortes definidos", () => {
+    const comTotal = (nota: number) =>
+      verificarAnalise(
+        analise({
+          icp: {
+            fitDeNecessidade: dimensao({ nota: Math.min(25, nota), trecho: null }),
+            poderDeDecisao: dimensao({ nota: Math.min(20, Math.max(0, nota - 25)), trecho: null }),
+            orcamento: dimensao({ nota: Math.min(20, Math.max(0, nota - 45)), trecho: null }),
+            prazo: dimensao({ nota: Math.min(20, Math.max(0, nota - 65)), trecho: null }),
+            engajamento: dimensao({ nota: Math.min(15, Math.max(0, nota - 85)), trecho: null }),
+            perfilResumido: "x",
+          },
+        }),
+        PREPARADAS,
+      ).icp;
+
+    assert.equal(comTotal(90).faixa, "ALTO");
+    assert.equal(comTotal(50).faixa, "MEDIO");
+    assert.equal(comTotal(20).faixa, "BAIXO");
+  });
+
+  it("devolve as cinco dimensões, sempre, com rótulo legível", () => {
+    const resultado = verificarAnalise(analise(), PREPARADAS);
+
+    assert.equal(resultado.icp.dimensoes.length, 5);
+    assert.deepEqual(
+      resultado.icp.dimensoes.map((d) => d.rotulo),
+      ["Fit de necessidade", "Poder de decisão", "Orçamento", "Prazo de compra", "Engajamento"],
+    );
+    assert.equal(
+      resultado.icp.dimensoes.reduce((acc, d) => acc + d.maximo, 0),
+      100,
+      "os máximos precisam somar 100",
+    );
   });
 });

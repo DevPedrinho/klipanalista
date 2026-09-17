@@ -682,6 +682,7 @@ export async function loadOverview(params: {
       ...(analise
         ? {
             aiAnalysis: {
+              icp: analise.icp,
               sinais: analise.sinais,
               objecoes: analise.objecoes,
               resumoDaNecessidade: analise.resumoDaNecessidade,

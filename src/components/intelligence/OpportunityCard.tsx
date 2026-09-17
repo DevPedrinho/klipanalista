@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ActionType } from "@/domain/enums";
-import type { Opportunity } from "@/domain/types";
+import type { IcpScore, Opportunity } from "@/domain/types";
 import { Badge, Button, Card, ScoreBar } from "@/components/ui/primitives";
 import {
   PRIORITY_CLASSES,
@@ -199,8 +199,19 @@ export function OpportunityCard({
           <p className="mt-1 text-xs leading-relaxed text-text-secondary">{o.nextAction}</p>
         </div>
 
+        {/* ---------------- ICP: aderência do cliente ---------------- */}
+        {o.icp ? <BlocoIcp icp={o.icp} /> : null}
+
         {/* Etiquetas e objeções */}
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+          Etiquetas sugeridas para o contato
+        </p>
         <div className="flex flex-wrap gap-1.5">
+          {o.recommendedTagKeys.length === 0 ? (
+            <span className="text-xs text-text-muted">
+              Nenhuma etiqueta se aplica a esta conversa.
+            </span>
+          ) : null}
           {o.recommendedTagKeys.map((key) => (
             <Badge
               key={key}
@@ -360,5 +371,112 @@ export function OpportunityCard({
         </div>
       ) : null}
     </Card>
+  );
+}
+
+/* ==========================================================================
+   ICP — aderência do cliente ao perfil ideal
+   ==========================================================================
+   Fica separado do score de oportunidade de propósito, e a tela precisa
+   deixar isso óbvio: são perguntas diferentes.
+
+     score de oportunidade -> quanto este negócio merece atenção AGORA
+     ICP                   -> quanto este cliente se parece com quem compra
+
+   Um cliente com ICP alto e prazo distante não é urgente, mas vale cultivar.
+   Um com ICP baixo pedindo orçamento hoje é urgente e provavelmente não
+   fecha. Um número só apagaria justamente a diferença que faz o vendedor
+   escolher onde gastar a próxima hora.
+   ========================================================================== */
+
+const FAIXA_ICP: Record<IcpScore["faixa"], { rotulo: string; classe: string }> = {
+  ALTO: {
+    rotulo: "Alta aderência",
+    classe:
+      "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900",
+  },
+  MEDIO: {
+    rotulo: "Aderência parcial",
+    classe:
+      "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900",
+  },
+  BAIXO: {
+    rotulo: "Baixa aderência",
+    classe:
+      "bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800/60 dark:text-slate-200 dark:ring-slate-700",
+  },
+};
+
+function BlocoIcp({ icp }: { icp: IcpScore }) {
+  const faixa = FAIXA_ICP[icp.faixa];
+
+  return (
+    <div className="rounded-lg border border-border-subtle bg-surface-card p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+          ICP — aderência do cliente
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-text-primary">{icp.total}/100</span>
+          <Badge className={faixa.classe}>{faixa.rotulo}</Badge>
+        </div>
+      </div>
+
+      <p className="mt-1.5 text-xs leading-relaxed text-text-secondary">
+        {icp.perfilResumido}
+      </p>
+
+      <ul className="mt-3 space-y-2">
+        {icp.dimensoes.map((d) => {
+          const proporcao = d.maximo > 0 ? d.nota / d.maximo : 0;
+
+          return (
+            <li key={d.chave}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs font-medium text-text-primary">{d.rotulo}</span>
+                <span className="text-[11px] tabular-nums text-text-muted">
+                  {d.nota}/{d.maximo}
+                </span>
+              </div>
+
+              <div
+                className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-inset"
+                role="img"
+                aria-label={`${d.rotulo}: ${d.nota} de ${d.maximo}`}
+              >
+                <div
+                  className="h-full rounded-full bg-flowi-500"
+                  style={{ width: `${Math.round(proporcao * 100)}%` }}
+                />
+              </div>
+
+              <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">
+                {d.justificativa}
+              </p>
+
+              {/*
+                A evidência é o ponto do produto: nenhuma nota aparece sem que
+                dê para ver a frase que a sustenta. Quando a conversa não falou
+                do assunto, o silêncio é dito — é diferente de nota baixa por
+                mérito.
+              */}
+              {d.evidencia ? (
+                <p className="mt-1 border-l-2 border-border-subtle pl-2 text-[11px] italic leading-relaxed text-text-muted">
+                  “{d.evidencia}”
+                </p>
+              ) : d.evidenciaRejeitada ? (
+                <p className="mt-1 text-[11px] leading-relaxed text-rose-600 dark:text-rose-300">
+                  A citação não foi encontrada na conversa; a nota foi zerada.
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                  A conversa não trouxe nada sobre isto.
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
