@@ -141,15 +141,21 @@ export async function loadOverview(params: {
    * painel na listagem ("The PanelId field is required."). Nao ha como pedir
    * "todos os cards da conta" numa chamada so.
    *
+   * E so os paineis de VENDAS sao varridos. A conta sondada tem 20 paineis,
+   * 18 deles quadros pessoais de tarefas ("Minhas tarefas"): varrer todos
+   * custaria 20 chamadas para trazer cards que nao sao oportunidade
+   * comercial nenhuma, e ainda poluiria o funil com tarefas internas.
+   *
    * Se os paineis falharem, a lista de cards fica vazia — o que ja esta
    * registrado em `sourceFailures` pela falha dos paineis. Repetir a mesma
    * falha como se fossem duas so confundiria quem le o aviso.
    */
+  const painelDeVendasIds = panelsRes.data
+    .filter((panel) => panel.type === "SALES")
+    .map((panel) => panel.id);
+
   const [cardsSettled] = await Promise.allSettled([
-    cardsAdapter.listForPanels({
-      accountId,
-      panelIds: panelsRes.data.map((panel) => panel.id),
-    }),
+    cardsAdapter.listForPanels({ accountId, panelIds: painelDeVendasIds }),
   ]);
 
   const cardsRes = unwrap(cardsSettled, "Cards do CRM", [], sourceFailures);

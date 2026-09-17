@@ -114,6 +114,28 @@ export interface ConversationSnapshot {
   status: "OPEN" | "CLOSED" | "PENDING";
   startedAt: string;
   lastMessageAt: string;
+
+  /**
+   * Campos que a propria listagem de conversas ja traz (CONFIRMADOS no
+   * payload real de GET /chat/v2/session). Poder ler a recencia sem baixar
+   * todas as mensagens evita uma chamada por conversa.
+   */
+  /** Ultima mensagem recebida DO cliente. */
+  lastInboundAt?: string;
+  /** Ultima mensagem enviada AO cliente. */
+  lastOutboundAt?: string;
+  /** Quando o atendente respondeu pela primeira vez. */
+  firstResponseAt?: string;
+  /** Segundos que o cliente esperou pelo primeiro atendimento. */
+  waitSeconds?: number;
+  /** Duracao do atendimento em segundos. */
+  serviceSeconds?: number;
+  /**
+   * Link de visualizacao do atendimento devolvido pela propria API.
+   * Usado pela acao "Abrir atendimento" quando disponivel.
+   */
+  previewUrl?: string;
+
   messages: MessageSnapshot[];
 }
 

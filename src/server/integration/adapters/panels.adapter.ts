@@ -16,15 +16,28 @@ import { liveResult, mockResult, shouldUseMock, type AdapterResult } from "./bas
  *   GET /v1/panel/{id}/lost-reason   Motivos de perda
  *   GET /v1/panel/{id}/custom-fields Campos personalizados
  *
- * PENDENTE DE VALIDACAO: os literais do tipo de painel. O briefing cita
- * SALES e MANAGEMENT; a normalizacao abaixo aceita variacoes e cai em
- * SALES como padrao, registrando a incerteza.
+ * TIPO DE PAINEL — CONFIRMADO pela sonda contra a conta real: os literais
+ * sao SALES e MANAGEMENT, e a propria API confirma a distincao ao recusar
+ * motivos de perda em painel que nao seja de Vendas:
+ *
+ *   500 "O painel informado nao e do tipo 'Vendas'."
  */
 
+/**
+ * Qualquer valor desconhecido vira MANAGEMENT, e nao SALES.
+ *
+ * A direcao do padrao importa. Um painel classificado como SALES por engano
+ * entra na varredura e vira destino de card sugerido — a IA proporia
+ * registrar uma venda dentro do quadro de tarefas de alguem. O contrario
+ * apenas deixa o painel de fora ate que alguem note.
+ *
+ * Na conta sondada isso nao e hipotetico: dos 20 paineis, 18 sao quadros
+ * pessoais chamados "Minhas tarefas" e apenas 2 sao de vendas.
+ */
 function normalizePanelType(raw?: string): PanelType {
   const upper = (raw ?? "").toUpperCase();
-  if (upper.includes("MANAG") || upper.includes("GEST")) return "MANAGEMENT";
-  return "SALES";
+  if (upper.includes("SALES") || upper.includes("VEND")) return "SALES";
+  return "MANAGEMENT";
 }
 
 function mapStep(raw: unknown, index: number, report: MappingReport): PanelStep | null {
@@ -65,14 +78,22 @@ export const panelsAdapter = {
     const report = new MappingReport();
     const raw = await apiRequestAllPages<unknown>(ENDPOINTS.PANELS.LIST, {}, {}, 5);
 
-    // A listagem pode nao trazer as etapas; buscamos o detalhe de cada painel.
     const summaries = raw
       .map((item) => mapPanel(item, params.accountId, report))
       .filter((p): p is Panel => p !== null);
 
+    /**
+     * A listagem nao traz as etapas (CONFIRMADO: `steps` vem vazio em
+     * /v2/panel), so o detalhe traz. Mas buscar o detalhe de TODO painel
+     * seria caro e inutil: a conta sondada tem 20 paineis, 18 deles quadros
+     * pessoais de tarefas. So os paineis de vendas tem funil que interessa a
+     * analise comercial, entao so eles sao detalhados — 2 chamadas em vez
+     * de 20.
+     */
     const detailed = await Promise.all(
       summaries.map(async (panel) => {
-        if (panel.steps.length > 0) return panel;
+        if (panel.type !== "SALES" || panel.steps.length > 0) return panel;
+
         const detail = await apiRequest<unknown>(ENDPOINTS.PANELS.GET_BY_ID, {
           pathParams: { id: panel.id },
         });
@@ -106,11 +127,28 @@ export const panelsAdapter = {
     return { ...result, data: result.data.filter((p) => p.type === "SALES") };
   },
 
+  /**
+   * Motivos de perda de um painel.
+   *
+   * So existem em painel de VENDAS — a API recusa os demais com
+   * 500 "O painel informado nao e do tipo 'Vendas'.". Quem chamar precisa
+   * informar o tipo, para que o modulo nao gaste chamada em erro previsivel
+   * nem registre como falha algo que e a regra da plataforma.
+   */
   async listLossReasons(params: {
     accountId: string;
     panelId: string;
+    panelType: PanelType;
   }): Promise<AdapterResult<LossReason[]>> {
     if (shouldUseMock()) return mockResult(MOCK_LOSS_REASONS);
+
+    if (params.panelType !== "SALES") {
+      return {
+        data: [],
+        source: "live",
+        pendingValidation: [],
+      };
+    }
 
     const report = new MappingReport();
     const raw = await apiRequestAllPages<unknown>(

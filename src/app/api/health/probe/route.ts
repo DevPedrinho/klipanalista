@@ -65,7 +65,10 @@ function nomesDosCampos(valor: unknown): string[] | undefined {
 
 interface Sondagem {
   resultado: ProbeResult;
+  /** Itens da listagem, quando o payload for uma listagem. */
   itens: unknown[] | null;
+  /** Payload cru, para endpoints de detalhe, que nao devolvem lista. */
+  payload: unknown;
 }
 
 async function sondar(
@@ -84,6 +87,7 @@ async function sondar(
 
     return {
       itens,
+      payload: resposta.data,
       resultado: {
         key: contract.key,
         method: contract.method,
@@ -101,6 +105,7 @@ async function sondar(
 
     return {
       itens: null,
+      payload: null,
       resultado: {
         key: contract.key,
         method: contract.method,
@@ -184,28 +189,25 @@ export async function GET() {
    * para saber qual painel e de Vendas e para conferir se a recomendacao de
    * etapa reconhece a nomenclatura da casa.
    */
-  const crm = painelBruto.map((painel) => {
-    const steps = Array.isArray(painel["steps"]) ? (painel["steps"] as unknown[]) : [];
-    return {
-      id: typeof painel["id"] === "string" ? painel["id"] : undefined,
-      titulo: typeof painel["title"] === "string" ? painel["title"] : undefined,
-      // O literal cru: e ele que decide o que o modulo trata como funil de vendas.
-      tipoBruto: painel["type"] ?? null,
-      arquivado: painel["archived"] ?? null,
-      camposDaEtapa: nomesDosCampos(steps[0]),
-      etapas: steps.map((step) => {
-        const s = step as Record<string, unknown>;
-        return {
-          id: typeof s["id"] === "string" ? s["id"] : undefined,
-          titulo: s["title"] ?? s["name"] ?? null,
-          ordem: s["order"] ?? s["position"] ?? null,
-          faseBruta: s["phase"] ?? s["stepPhase"] ?? s["type"] ?? null,
-        };
-      }),
-    };
-  });
+  const resumoDosPaineis = painelBruto.map((painel) => ({
+    id: typeof painel["id"] === "string" ? painel["id"] : undefined,
+    titulo: typeof painel["title"] === "string" ? painel["title"] : undefined,
+    // CONFIRMADO: os literais sao SALES e MANAGEMENT.
+    tipoBruto: typeof painel["type"] === "string" ? painel["type"] : null,
+    arquivado: painel["archived"] ?? null,
+  }));
 
-  const panelIds = crm.map((p) => p.id).filter((id): id is string => Boolean(id));
+  /**
+   * So os paineis de VENDAS sao aprofundados.
+   *
+   * A conta tem 20 paineis e 18 sao quadros pessoais de tarefas. Sondar
+   * todos gastaria 40 chamadas para produzir 36 erros previsiveis — a
+   * propria API recusa motivos de perda fora de painel de Vendas.
+   */
+  const vendasIds = resumoDosPaineis
+    .filter((p) => p.tipoBruto === "SALES")
+    .map((p) => p.id)
+    .filter((id): id is string => Boolean(id));
 
   const segundaRodada = await Promise.all([
     ...(sessionId
@@ -217,20 +219,46 @@ export async function GET() {
           }),
         ]
       : []),
-    // Um card por painel: a API EXIGE panelId na listagem — sem ele responde
-    // 500 "The PanelId field is required.".
-    ...panelIds.map((id) =>
+    // A listagem de cards EXIGE panelId — sem ele responde 500
+    // "The PanelId field is required.".
+    ...vendasIds.map((id) =>
       sondar(ENDPOINTS.CARDS.LIST, { query: { panelId: id, page: 1, pageSize: 5 } }),
     ),
-    // Motivos de perda so existem em painel de Vendas. Sondar todos revela
-    // qual literal de `type` corresponde a Vendas nesta conta.
-    ...panelIds.map((id) =>
+    ...vendasIds.map((id) =>
       sondar(ENDPOINTS.PANELS.LOST_REASONS, {
         pathParams: { id },
         query: { page: 1, pageSize: 5 },
       }),
     ),
+    // O detalhe do painel: e dele que saem as etapas do funil. A listagem
+    // devolve `steps` vazio, entao e aqui que da para conferir se a
+    // recomendacao de etapa reconhece a nomenclatura da casa.
+    ...vendasIds.map((id) => sondar(ENDPOINTS.PANELS.GET_BY_ID, { pathParams: { id } })),
   ]);
+
+  /** Etapas do funil, lidas do DETALHE de cada painel de vendas. */
+  const funis = segundaRodada
+    .filter((r) => r.resultado.key === "PANELS_GET_BY_ID" && r.resultado.ok)
+    .map((r) => {
+      // O detalhe nao e uma listagem: o payload e o proprio painel.
+      const painel = (r.payload ?? {}) as Record<string, unknown>;
+      const steps = Array.isArray(painel["steps"]) ? (painel["steps"] as unknown[]) : [];
+
+      return {
+        titulo: painel["title"] ?? null,
+        camposDaEtapa: nomesDosCampos(steps[0]),
+        etapas: steps.map((step) => {
+          const s = step as Record<string, unknown>;
+          return {
+            titulo: s["title"] ?? s["name"] ?? null,
+            ordem: s["order"] ?? s["position"] ?? null,
+            faseBruta: s["phase"] ?? s["stepPhase"] ?? s["type"] ?? null,
+          };
+        }),
+      };
+    });
+
+  const crm = { paineis: resumoDosPaineis, funis };
 
   const primeiroCard = segundaRodada.find(
     (r) => r.resultado.key === "CARDS_LIST" && r.resultado.ok,
