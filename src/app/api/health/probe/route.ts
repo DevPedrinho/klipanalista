@@ -339,8 +339,8 @@ async function medirOrdemDasConversas() {
  * e nunca varre a conta. Telefone, e-mail, CPF e CNPJ saem mascarados como
  * em qualquer outro caminho do modulo.
  *
- * Tambem responde uma pergunta de diagnostico: esta conversa aparece nas 10
- * paginas que a Central carrega? Se nao aparecer, e a prova de que a leitura
+ * Tambem responde uma pergunta de diagnostico: esta conversa aparece na
+ * varredura que a Central faz? Se nao aparecer, e a prova de que a leitura
  * esta pegando a parte errada da conta.
  */
 async function abrirConversa(sessionId: string) {
@@ -419,19 +419,44 @@ async function abrirConversa(sessionId: string) {
   });
 
   /*
-   * A checagem decisiva: a Central le 10 paginas de 50. Se esta conversa nao
-   * estiver la, o modulo nunca teve chance de analisa-la.
+   * A checagem decisiva: a Central alcanca esta conversa?
+   *
+   * A varredura NAO comeca na pagina 1. A API entrega a listagem da conversa
+   * mais ANTIGA para a mais nova, entao o adaptador le de tras para frente, a
+   * partir de `totalPages`, ate no maximo 20 paginas de 50. Procurar pela
+   * frente — como esta sonda fazia — respondia sempre "nao ve", porque as
+   * primeiras paginas desta conta sao de outubro de 2025.
    */
+  const primeira = await sondar(ENDPOINTS.SESSIONS.LIST, {
+    query: { pageNumber: 1, pageSize: 50 },
+  });
+
+  const envelopePrimeira = (primeira.payload ?? {}) as Record<string, unknown>;
+  const totalPaginas =
+    typeof envelopePrimeira["totalPages"] === "number"
+      ? (envelopePrimeira["totalPages"] as number)
+      : 1;
+
+  const MAX_PAGINAS = 20;
+
   let apareceNaVarredura = false;
   let paginaOndeApareceu: number | null = null;
   let paginasLidas = 0;
 
-  for (let pagina = 1; pagina <= 10; pagina += 1) {
-    const lote = await sondar(ENDPOINTS.SESSIONS.LIST, {
-      query: { pageNumber: pagina, pageSize: 50 },
-    });
+  for (
+    let pagina = totalPaginas;
+    pagina >= 1 && paginasLidas < MAX_PAGINAS;
+    pagina -= 1
+  ) {
+    const lote =
+      pagina === 1
+        ? primeira
+        : await sondar(ENDPOINTS.SESSIONS.LIST, {
+            query: { pageNumber: pagina, pageSize: 50 },
+          });
 
-    paginasLidas = pagina;
+    paginasLidas += 1;
+
     const encontrada = (lote.itens ?? []).some(
       (item) => (item as Record<string, unknown>)["id"] === sessionId,
     );
@@ -441,7 +466,6 @@ async function abrirConversa(sessionId: string) {
       paginaOndeApareceu = pagina;
       break;
     }
-    if ((lote.itens ?? []).length === 0) break;
   }
 
   return {
@@ -461,9 +485,16 @@ async function abrirConversa(sessionId: string) {
       apareceNasPaginasQueACentralLe: apareceNaVarredura,
       paginaOndeApareceu,
       paginasLidas,
+      totalPaginas,
+      // Quantas paginas do FIM foram necessarias: e a distancia real entre
+      // esta conversa e a borda recente da conta.
+      distanciaDoFim:
+        paginaOndeApareceu === null ? null : totalPaginas - paginaOndeApareceu + 1,
       observacao: apareceNaVarredura
         ? "A Central consegue ver esta conversa."
-        : "A Central NAO ve esta conversa: ela esta fora das 10 primeiras paginas.",
+        : "A Central NAO ve esta conversa: ela esta fora das " +
+          String(MAX_PAGINAS) +
+          " ultimas paginas.",
     },
   };
 }
