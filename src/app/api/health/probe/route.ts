@@ -412,14 +412,48 @@ async function procurarEtapas(panelId: string) {
     }),
   );
 
+  /*
+   * Segunda pergunta, independente da primeira: o nome vem nos CARDS?
+   *
+   * O campo `stepTitle` existe no payload de card. Se ele chegar preenchido,
+   * o funil pode ser nomeado sem nenhum endpoint novo — e entao o defeito
+   * esta no mapeamento, nao na API. Valores de configuracao do funil, sem
+   * dado de cliente.
+   */
+  const cards = await sondar(ENDPOINTS.CARDS.LIST, {
+    query: { PanelId: panelId, pageNumber: 1, pageSize: 10 },
+  });
+
+  const etapasNosCards = (cards.itens ?? []).map((item) => {
+    const card = item as Record<string, unknown>;
+    return {
+      stepId: card["stepId"] ?? null,
+      stepTitle: card["stepTitle"] ?? null,
+      stepPhase: card["stepPhase"] ?? null,
+      panelTitle: card["panelTitle"] ?? null,
+    };
+  });
+
+  const algumNomeNoCard = etapasNosCards.some(
+    (e) => typeof e.stepTitle === "string" && e.stepTitle.length > 0,
+  );
+
   const venceu = tentativas.find((t) => t.ok && (t.quantidade ?? 0) > 0 && t.exemploDeNome);
 
   return {
     painel: panelId,
     tentativas,
+    cards: {
+      quantidade: etapasNosCards.length,
+      etapasNosCards,
+      algumNomeNoCard,
+    },
     conclusao: venceu
       ? "As etapas vem de " + venceu.caminho + "."
-      : "Nenhum candidato devolveu etapas nomeadas. O nome pode nao estar exposto na API.",
+      : algumNomeNoCard
+        ? "Nenhum endpoint de etapa respondeu, mas os cards trazem `stepTitle`: o nome sai dai."
+        : "Nem os endpoints candidatos nem o `stepTitle` dos cards trazem nome. " +
+          "Pelo que a API expoe a este token, o nome da etapa nao esta disponivel.",
   };
 }
 
