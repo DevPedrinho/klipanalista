@@ -48,6 +48,11 @@ function msg(text: string, id = "m1"): MessageSnapshot {
   };
 }
 
+/** Mensagem da EQUIPE, não do cliente. */
+function daEquipe(text: string, id = "e1"): MessageSnapshot {
+  return { ...msg(text, id), direction: "OUTBOUND" };
+}
+
 /* ==========================================================================
    Faixas de valor
    ========================================================================== */
@@ -215,6 +220,60 @@ describe("etiqueta mencionada literalmente na conversa", () => {
     assert.deepEqual(
       sugestoes.map((s) => s.tagName).sort(),
       ["4k-7k", "PC Gamer", "PC Trabalho"],
+    );
+  });
+
+  /**
+   * Os dois falsos positivos que a conta real produziu na primeira rodada.
+   *
+   * A mensagem automática de endereço da loja — enviada pela equipe, idêntica
+   * em toda conversa — contém `https://share.google/...`. Ela fez "Google"
+   * ser sugerida a dois contatos diferentes. Uma etiqueta que sai do texto
+   * padrão da equipe diria o mesmo sobre todo mundo, e portanto não diz nada.
+   */
+  const ENDERECO_DA_LOJA =
+    "📍 Endereço\n- Pátio Arvoredo – Rua Ecilda de Queiroz, 200, Loja 17\n" +
+    "- https://share.google/hBPVkPAomycEwVLUB\n\n🕒 Horário de Funcionamento\n" +
+    "- Segunda a Sábado, 09h às 18h30";
+
+  it("ignora o que a EQUIPE disse: a etiqueta descreve o cliente", () => {
+    const sugestoes = sugerirEtiquetasDaConta({
+      tags: CONTA_REAL,
+      messages: [
+        // Sem URL nenhuma: é o vendedor oferecendo, em texto puro. Se isto
+        // etiquetasse o contato, todo mundo que recebeu o discurso padrão
+        // viraria "PC Gamer" — e a etiqueta deixaria de significar algo.
+        daEquipe("Temos PC Gamer e PC Trabalho, veio por Indicação ou Instagram?"),
+        msg("ok, obrigado"),
+      ],
+    });
+
+    assert.deepEqual(sugestoes, []);
+  });
+
+  it("nao le dominio de link como mencao, nem vindo do cliente", () => {
+    const sugestoes = sugerirEtiquetasDaConta({
+      tags: CONTA_REAL,
+      // O cliente colando o link não está dizendo que veio do Google.
+      messages: [msg(`achei aqui ó https://share.google/hBPVkPAomycEwVLUB`)],
+    });
+
+    assert.deepEqual(sugestoes, []);
+  });
+
+  it("continua sugerindo quando o CLIENTE diz de onde veio", () => {
+    const sugestoes = sugerirEtiquetasDaConta({
+      tags: CONTA_REAL,
+      messages: [
+        daEquipe(ENDERECO_DA_LOJA),
+        msg("Eu vi até no Instagram que hoje vocês estavam fechados", "m2"),
+      ],
+    });
+
+    assert.deepEqual(
+      sugestoes.map((s) => s.tagName),
+      ["Instagram"],
+      "a menção do cliente vale; a da equipe, não",
     );
   });
 

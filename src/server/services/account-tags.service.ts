@@ -110,13 +110,29 @@ export function lerFaixasDeValor(tags: Tag[]): FaixaDeValor[] {
 
 /** Normaliza para comparar: minusculas, sem acento, sem pontuacao. */
 function normalizar(texto: string): string {
-  return texto
+  return semEnderecos(texto)
     .toLowerCase()
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Remove URLs e e-mails antes de procurar mencao.
+ *
+ * Medido na conta real: a etiqueta "Google" foi sugerida a dois contatos
+ * porque a mensagem de endereco da loja continha `https://share.google/...`.
+ * Depois de tirar a pontuacao, "share google" virava as palavras "share" e
+ * "google", e "google" casava. Mas um dominio nao e alguem dizendo de onde
+ * veio — e so a forma do link.
+ */
+function semEnderecos(texto: string): string {
+  return texto
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\b[\w.-]+@[\w.-]+\.\w+\b/gi, " ")
+    .replace(/\b(?:[\w-]+\.)+(?:com|br|net|org|io|app|me|gl|co)\b\S*/gi, " ");
 }
 
 /**
@@ -183,13 +199,25 @@ export function sugerirEtiquetasDaConta(params: {
   // de numero, nao mencao de etiqueta.
   const idsDeFaixa = new Set(faixas.map((f) => f.tag.id));
 
+  /*
+   * So o que o CLIENTE disse conta.
+   *
+   * A etiqueta descreve o cliente, entao quem tem que ter dito e ele. Medido
+   * na conta real: "Google" foi sugerida a dois contatos porque a mensagem
+   * automatica de endereco da propria loja — enviada pela equipe, identica
+   * nas duas conversas — citava um link do Google. Uma etiqueta baseada no
+   * texto padrao da equipe nao diz nada sobre o cliente: diria o mesmo sobre
+   * todos eles.
+   */
+  const doCliente = params.messages.filter((m) => m.direction === "INBOUND");
+
   for (const tag of params.tags) {
     if (jaSugeridas.has(tag.id) || idsDeFaixa.has(tag.id)) continue;
 
     const nome = normalizar(tag.name);
     if (nome.length < MINIMO_PARA_MENCAO) continue;
 
-    for (const mensagem of params.messages) {
+    for (const mensagem of doCliente) {
       const texto = mensagem.text ?? "";
       if (!texto) continue;
 
@@ -203,6 +231,7 @@ export function sugerirEtiquetasDaConta(params: {
         tagId: tag.id,
         tagName: tag.name,
         motivo: "O cliente mencionou isto na conversa.",
+
         trecho:
           posicao >= 0 ? recortar(texto, posicao, tag.name.length) : recortar(texto, 0, 0),
         origem: "MENCAO_NA_CONVERSA",
