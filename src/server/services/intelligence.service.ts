@@ -259,8 +259,27 @@ export async function loadOverview(params: {
 
   const [sessionsSettled, contactsSettled, panelsSettled, usersSettled, tagsSettled] =
     await Promise.allSettled([
-      sessionsAdapter.list({ accountId, updatedAfter: filters.period.from }),
-      contactsAdapter.list({ accountId }),
+      sessionsAdapter.list({
+        accountId,
+        updatedAfter: filters.period.from,
+        // Margem sobre o teto: parte das conversas cai fora do escopo do
+        // usuario ou do filtro de equipe, entao vale trazer um pouco mais.
+        limite: Math.ceil(tetoDeConversas() * 1.5),
+      }),
+      /*
+       * Contatos NAO sao carregados em massa no modo real.
+       *
+       * A conta tem 14.239 contatos. Ler 10 paginas trazia 500 — e, como a
+       * ordem da API e crescente, eram os 500 MAIS ANTIGOS: justamente os que
+       * nao aparecem nas conversas recentes. Custava segundos do orcamento
+       * para quase sempre errar o alvo.
+       *
+       * Os contatos das conversas analisadas sao buscados por id logo abaixo,
+       * que e o caminho que ja existia como complemento e agora e o unico.
+       */
+      shouldUseMock()
+        ? contactsAdapter.list({ accountId })
+        : Promise.resolve({ data: [], source: "live" as const, pendingValidation: [] }),
       panelsAdapter.list({ accountId }),
       agentsAdapter.list({ accountId }),
       tagsAdapter.list({ accountId }),

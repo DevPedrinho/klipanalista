@@ -119,6 +119,15 @@ export interface ListSessionsParams {
   updatedAfter?: string;
   agentIds?: string[];
   maxPages?: number;
+  /**
+   * Quantas conversas bastam.
+   *
+   * A analise tem teto proprio (60 por padrao) e a ordem da API e crescente,
+   * entao as ultimas paginas trazem as mais recentes — exatamente as que
+   * serao escolhidas. Ler as 547 do periodo para depois descartar 487 custou
+   * 29 segundos de orcamento e deixou zero conversas analisadas.
+   */
+  limite?: number;
 }
 
 export const sessionsAdapter = {
@@ -196,6 +205,7 @@ export const sessionsAdapter = {
 
       if (corte === undefined) {
         coletadas.push(...itens);
+        if (params.limite !== undefined && coletadas.length >= params.limite) break;
         continue;
       }
 
@@ -211,6 +221,9 @@ export const sessionsAdapter = {
 
       // Pagina inteira antes do corte: as anteriores sao ainda mais antigas.
       if (dentroDoCorte.length === 0) break;
+
+      // Ja ha conversas recentes suficientes para a analise.
+      if (params.limite !== undefined && coletadas.length >= params.limite) break;
     }
 
     const sessions = coletadas
