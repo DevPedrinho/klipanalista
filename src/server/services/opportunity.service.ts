@@ -4,6 +4,7 @@ import type {
   ContactSnapshot,
   ConversationSnapshot,
   CrmCard,
+  DetectedSignal,
   IntegrationSettings,
   IntelligenceKpis,
   Opportunity,
@@ -33,6 +34,23 @@ export interface BuildInput {
   panels: Panel[];
   settings: IntegrationSettings;
   now?: Date;
+  /**
+   * Leitura da conversa feita pela IA, quando disponivel.
+   *
+   * Entra como INSUMO do motor de score, nunca como substituto dele: os
+   * sinais vem do modelo (cada um ancorado num trecho literal ja verificado),
+   * e os pesos, cortes e regras de contexto continuam sendo os mesmos. Por
+   * isso uma oportunidade encontrada pela IA e explicavel do mesmo jeito que
+   * uma encontrada por expressao regular.
+   */
+  aiAnalysis?: {
+    sinais: DetectedSignal[];
+    objecoes: string[];
+    resumoDaNecessidade: string;
+    produtoDeInteresse?: string;
+    proximoPasso: string;
+    valorMencionado?: number;
+  };
 }
 
 /* --------------------------------------------------------------------------
@@ -484,6 +502,7 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
       existingCard,
       previousConversationCount: input.previousConversationCount,
       now,
+      ...(input.aiAnalysis ? { signals: input.aiAnalysis.sinais } : {}),
     },
     {
       hasName: Boolean(contact?.name),
@@ -515,7 +534,9 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
     lastMessageFromContact: Boolean(lastMessageFromContact),
   });
 
-  const statedValue = extractStatedValue(conversation);
+  // O valor citado pela IA so vale se ela realmente achou um numero ESCRITO
+  // na conversa — o prompt proibe estimar, e o card confirmado sempre vence.
+  const statedValue = input.aiAnalysis?.valorMencionado ?? extractStatedValue(conversation);
   const estimatedValue = existingCard?.amount ?? statedValue;
   const productInterest = extractProductInterest(conversation);
   const opportunityId = `opp_${conversation.id}`;
@@ -540,8 +561,13 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
     agentId: conversation.agentId,
     agentName: conversation.agentName,
 
-    productInterest,
-    needSummary: summarizeNeed(conversation),
+    /*
+     * Onde a IA melhora a leitura, ela assume; onde nao ha IA, o texto
+     * deterministico continua valendo. Os dois caminhos passaram pelo mesmo
+     * motor de score, entao nao ha risco de a tela misturar criterios.
+     */
+    productInterest: input.aiAnalysis?.produtoDeInteresse ?? productInterest,
+    needSummary: input.aiAnalysis?.resumoDaNecessidade ?? summarizeNeed(conversation),
 
     lastInteractionAt: conversation.lastMessageAt,
     hoursWithoutReply,
@@ -562,15 +588,20 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
 
     reason: scoreResult.rationale[0] ?? "Sinais comerciais identificados na conversa.",
     evidence: scoreResult.signals,
-    objections: detectObjections(conversation.messages),
+    objections:
+      input.aiAnalysis && input.aiAnalysis.objecoes.length > 0
+        ? input.aiAnalysis.objecoes
+        : detectObjections(conversation.messages),
 
-    nextAction: recommendNextAction({
-      priority: scoreResult.priority,
-      hoursWithoutReply,
-      signalCodes,
-      hasOpenCard: Boolean(hasOpenCard),
-      lastMessageFromContact: Boolean(lastMessageFromContact),
-    }),
+    nextAction:
+      input.aiAnalysis?.proximoPasso ??
+      recommendNextAction({
+        priority: scoreResult.priority,
+        hoursWithoutReply,
+        signalCodes,
+        hasOpenCard: Boolean(hasOpenCard),
+        lastMessageFromContact: Boolean(lastMessageFromContact),
+      }),
     suggestedFollowUpMessage: buildFollowUpMessage({
       contactName: contact?.name ?? "cliente",
       agentName: conversation.agentName,

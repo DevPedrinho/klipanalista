@@ -34,6 +34,11 @@ import {
   filterByVisibility,
 } from "./opportunity.service";
 import { buildQualityReport } from "./quality.service";
+import { aiHabilitada } from "@/server/ai/client";
+import {
+  analisarConversa,
+  type ResultadoDaAnalise,
+} from "@/server/ai/opportunity-analyst";
 import { getSettings } from "./settings.service";
 
 /**
@@ -126,6 +131,14 @@ function orcamentoDeTempoMs(): number {
 
 /** Quantas conversas sao buscadas por vez, entre verificacoes do relogio. */
 const LOTE = 8;
+
+/**
+ * Conversas analisadas pela IA em paralelo.
+ *
+ * Menor que o lote de leitura: cada chamada e bem mais cara e demorada que um
+ * GET, e disparar dezenas de uma vez so troca o gargalo de lugar.
+ */
+const LOTE_IA = 4;
 
 /**
  * Paginas de mensagens lidas por conversa na analise em massa.
@@ -498,6 +511,76 @@ export async function loadOverview(params: {
   /* --- Constroi as oportunidades ----------------------------------------- */
   const built: Opportunity[] = [];
 
+  /*
+   * Leitura por IA, quando configurada.
+   *
+   * Vem antes da montagem porque os sinais que o modelo encontra sao insumo
+   * do MESMO motor de score. Segue os limites que ja protegem a varredura:
+   * lotes, relogio e degradacao silenciosa — se a IA falhar, a analise
+   * deterministica continua, e a falha aparece nomeada em vez de virar uma
+   * tela vazia.
+   */
+  const inicioIa = Date.now();
+  const analises = new Map<string, ResultadoDaAnalise>();
+  let iaComFalha = 0;
+  let iaNaoAnalisadas = 0;
+  let primeiraFalhaDaIa: string | undefined;
+
+  if (aiHabilitada()) {
+    for (const lote of emLotes(inScope, LOTE_IA)) {
+      if (Date.now() >= prazo) {
+        iaNaoAnalisadas += lote.length;
+        continue;
+      }
+
+      const resultados = await Promise.allSettled(
+        lote.map(async (conversation) => {
+          const contato = contacts.find((c) => c.id === conversation.contactId);
+          const analise = await analisarConversa({
+            conversation,
+            contactName: contato?.name ?? "cliente",
+          });
+          return { id: conversation.id, analise };
+        }),
+      );
+
+      for (const resultado of resultados) {
+        if (resultado.status === "rejected") {
+          iaComFalha += 1;
+          const motivo =
+            resultado.reason instanceof Error
+              ? resultado.reason.message
+              : String(resultado.reason);
+          primeiraFalhaDaIa ??= motivo;
+          continue;
+        }
+        if (resultado.value.analise) {
+          analises.set(resultado.value.id, resultado.value.analise);
+        }
+      }
+    }
+
+    marcar("ia", inicioIa);
+
+    if (iaComFalha > 0) {
+      sourceFailures.push({
+        source: "Análise por IA",
+        kind: "PARCIAL",
+        message:
+          `A IA não conseguiu ler ${iaComFalha} de ${inScope.length} conversa(s). ` +
+          `Elas foram analisadas apenas pela detecção determinística. ` +
+          `Primeira falha: ${primeiraFalhaDaIa ?? "desconhecida"}`,
+      });
+    }
+
+    if (iaNaoAnalisadas > 0) {
+      pending.add(
+        `${iaNaoAnalisadas} conversa(s) não passaram pela IA por limite de tempo. ` +
+          `Elas aparecem com a leitura determinística, que é mais conservadora.`,
+      );
+    }
+  }
+
   for (const conversation of inScope) {
     const contact = contacts.find((c) => c.id === conversation.contactId);
     const existingCard = cards.find(
@@ -510,6 +593,8 @@ export async function loadOverview(params: {
       (c) => c.contactId === conversation.contactId && c.id !== conversation.id,
     ).length;
 
+    const analise = analises.get(conversation.id);
+
     const opportunity = buildOpportunity({
       conversation,
       contact,
@@ -518,6 +603,22 @@ export async function loadOverview(params: {
       panels,
       settings,
       now,
+      ...(analise
+        ? {
+            aiAnalysis: {
+              sinais: analise.sinais,
+              objecoes: analise.objecoes,
+              resumoDaNecessidade: analise.resumoDaNecessidade,
+              ...(analise.produtoDeInteresse
+                ? { produtoDeInteresse: analise.produtoDeInteresse }
+                : {}),
+              proximoPasso: analise.proximoPasso,
+              ...(analise.valorMencionado !== undefined
+                ? { valorMencionado: analise.valorMencionado }
+                : {}),
+            },
+          }
+        : {}),
     });
 
     if (opportunity) built.push(opportunity);

@@ -39,6 +39,17 @@ export interface ScoreInput {
   existingCard?: CrmCard;
   /** Numero de conversas anteriores do mesmo contato. */
   previousConversationCount: number;
+  /**
+   * Sinais ja detectados, quando houver.
+   *
+   * Existe para que a leitura por IA entre no MESMO motor de pontuacao: o
+   * modelo encontra os sinais, com trecho literal verificado, e os pesos,
+   * cortes e regras de contexto daqui continuam decidindo o score. Assim a
+   * analise fica melhor sem ficar inauditavel.
+   *
+   * Omitido, o motor detecta sozinho como sempre fez.
+   */
+  signals?: DetectedSignal[];
   /** Momento de referencia para calcular recencia. Default: agora. */
   now?: Date;
 }
@@ -284,7 +295,7 @@ export function computeScore(input: ScoreInput, dataQuality: DataQualityInput): 
   const now = input.now ?? new Date();
   const { conversation, existingCard, previousConversationCount } = input;
 
-  const signals = detectSignals(conversation.messages);
+  const signals = input.signals ?? detectSignals(conversation.messages);
   const positives = signals.filter((s) => s.polarity === "POSITIVE");
   const disqualifiers = signals.filter((s) => s.polarity === "NEGATIVE");
 
