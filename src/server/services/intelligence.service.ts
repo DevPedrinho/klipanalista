@@ -757,9 +757,22 @@ export async function loadOverview(params: {
       const agentConversations = inScope.filter((c) => c.agentId === agentId);
       if (agentConversations.length === 0) return null;
 
+      /*
+       * O nome do atendente tem duas fontes, e a segunda importa.
+       *
+       * O cadastro de usuarios e a fonte preferida, mas nem todo `userId` de
+       * conversa aparece nele (atendente desligado, usuario de outra conta
+       * vinculada, paginacao do cadastro). Quando isso acontecia, o relatorio
+       * de qualidade estampava o UUID cru no lugar do nome — ilegivel para
+       * quem precisa reconhecer a propria equipe. A propria conversa carrega
+       * `agentDetails.name`, entao usamos esse nome antes de desistir e
+       * mostrar o identificador.
+       */
+      const nomeNaConversa = agentConversations.find((c) => c.agentName)?.agentName;
+
       return buildQualityReport({
         agentId,
-        agentName: user?.name ?? agentId,
+        agentName: user?.name ?? nomeNaConversa ?? agentId,
         teamName: user?.teamName,
         conversations: agentConversations,
         cards: cards.filter((c) => c.responsibleId === agentId),

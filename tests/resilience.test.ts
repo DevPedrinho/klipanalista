@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { loadOverview } from "@/server/services/intelligence.service";
-import { panelsAdapter, cardsAdapter } from "@/server/integration/adapters";
+import { agentsAdapter, panelsAdapter, cardsAdapter } from "@/server/integration/adapters";
 import {
   ApiError,
   apiRequestAllPagesWithOutcome,
@@ -709,5 +709,69 @@ describe("periodo e aplicado antes do teto", () => {
       false,
       "uma conversa no periodo cabe no teto de 60; dizer que truncou assusta a toa",
     );
+  });
+});
+
+/**
+ * Nome do atendente quando o cadastro nao ajuda.
+ *
+ * Na conta real varios `userId` de conversa nao aparecem na listagem de
+ * usuarios — atendente desligado, conta vinculada, paginacao do cadastro. O
+ * relatorio de qualidade entao estampava o UUID cru no cabecalho, e quem abre
+ * a tela para reconhecer a propria equipe nao reconhece nada.
+ *
+ * A conversa ja carrega `agentDetails.name`. Este teste garante que esse nome
+ * e usado antes de cair no identificador.
+ */
+describe("Relatorio de qualidade nomeia o atendente", () => {
+  /** Substitui um adapter por um valor fixo e devolve como restaura-lo. */
+  function fixar<T extends object, K extends keyof T>(
+    alvo: T,
+    metodo: K,
+    valor: unknown,
+  ): () => void {
+    const original = alvo[metodo];
+    (alvo[metodo] as unknown) = async () => valor;
+    return () => {
+      alvo[metodo] = original;
+    };
+  }
+
+  it("usa o nome que veio na conversa quando o usuario nao esta no cadastro", async () => {
+    // Cadastro vazio: nenhum agentId sera encontrado em `users`.
+    const restaurar = fixar(agentsAdapter, "list", {
+      data: [],
+      source: "mock" as const,
+      pendingValidation: [],
+    });
+
+    try {
+      const overview = await loadOverview({ context: contexto, filters: filtros });
+
+      assert.ok(
+        overview.qualityReports.length > 0,
+        "sem relatorio nao ha o que verificar",
+      );
+
+      const esperados = new Set(
+        MOCK_CONVERSATIONS.map((c) => c.agentName).filter(
+          (n): n is string => Boolean(n),
+        ),
+      );
+
+      for (const relatorio of overview.qualityReports) {
+        assert.notEqual(
+          relatorio.agentName,
+          relatorio.agentId,
+          `o relatorio caiu no identificador em vez do nome: ${relatorio.agentId}`,
+        );
+        assert.ok(
+          esperados.has(relatorio.agentName),
+          `nome inesperado no relatorio: ${relatorio.agentName}`,
+        );
+      }
+    } finally {
+      restaurar();
+    }
   });
 });
