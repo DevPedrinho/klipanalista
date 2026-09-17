@@ -153,7 +153,13 @@ function orcamentoDeTempoMs(): number {
   // resposta sai so com o que ja estava carregado, dizendo que parou por
   // tempo. Util para diagnosticar e para desligar a varredura sem mexer em
   // codigo.
-  return Number.isFinite(bruto) && bruto >= 0 ? Math.floor(bruto) : 25_000;
+  //
+  // 45 segundos, contra um `maxDuration` de 60. Os 25 anteriores foram
+  // calibrados quando so o carregamento levava 29 segundos; hoje ele leva
+  // cerca de 12, e o que sobrava nao dava para uma unica leva de leitura da
+  // IA terminar. A margem de 15 segundos cobre a serializacao da resposta e
+  // o arredondamento da plataforma.
+  return Number.isFinite(bruto) && bruto >= 0 ? Math.floor(bruto) : 45_000;
 }
 
 /** Quantas conversas sao buscadas por vez, entre verificacoes do relogio. */
@@ -170,6 +176,62 @@ const LOTE = 8;
  * mensagens ja trazem o pedido original e o essencial do contexto.
  */
 const PAGINAS_DE_MENSAGEM_NA_VARREDURA = 2;
+
+/**
+ * Percorre uma fila com N trabalhadores em paralelo, respeitando um prazo.
+ *
+ * A alternativa — levas de tamanho fixo com uma checagem de relogio entre
+ * elas — desperdica o orcamento de duas maneiras, ambas medidas contra a
+ * conta real. A leva inteira espera pela conversa mais lenta, e a checagem
+ * so acontece na fronteira: com 60 conversas em levas de 20, a primeira leva
+ * levou 23 segundos, o prazo venceu na fronteira seguinte e 40 conversas
+ * ficaram sem analise nenhuma — o orcamento tinha acabado, mas 19 dos 20
+ * trabalhadores estavam ociosos ha segundos.
+ *
+ * Com uma fila, quem termina puxa o proximo item e o relogio e consultado
+ * antes de cada item, nao a cada 20. O mesmo orcamento vira bem mais
+ * cobertura, e o que sobra e informado em vez de sumir.
+ */
+export async function emParalelo<T, R>(
+  itens: T[],
+  trabalhadores: number,
+  prazo: number,
+  tarefa: (item: T) => Promise<R>,
+): Promise<{ resultados: PromiseSettledResult<R>[]; naoIniciados: number }> {
+  const resultados: PromiseSettledResult<R>[] = [];
+  let proximo = 0;
+  let naoIniciados = 0;
+
+  async function trabalhar(): Promise<void> {
+    for (;;) {
+      const indice = proximo;
+      proximo += 1;
+      if (indice >= itens.length) return;
+
+      const item = itens[indice];
+      if (item === undefined) return;
+
+      // O prazo e consultado por ITEM: uma conversa lenta nao decide o
+      // destino das que ainda nem comecaram.
+      if (Date.now() >= prazo) {
+        naoIniciados += 1;
+        continue;
+      }
+
+      try {
+        resultados.push({ status: "fulfilled", value: await tarefa(item) });
+      } catch (erro) {
+        resultados.push({ status: "rejected", reason: erro });
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(trabalhadores, itens.length)) }, trabalhar),
+  );
+
+  return { resultados, naoIniciados };
+}
 
 /** Divide uma lista em lotes de tamanho fixo. */
 function emLotes<T>(itens: T[], tamanho: number): T[][] {
@@ -606,43 +668,41 @@ export async function loadOverview(params: {
   const usarIa = aiHabilitada() && !params.semIa;
 
   if (usarIa) {
-    for (const lote of emLotes(inScope, getConcorrencia())) {
-      if (Date.now() >= prazo) {
-        iaNaoAnalisadas += lote.length;
+    const { resultados, naoIniciados } = await emParalelo(
+      inScope,
+      getConcorrencia(),
+      prazo,
+      async (conversation) => {
+        const contato = contacts.find((c) => c.id === conversation.contactId);
+        const analise = await analisarConversa({
+          conversation,
+          contactName: contato?.name ?? "cliente",
+        });
+        return { id: conversation.id, analise };
+      },
+    );
+
+    iaNaoAnalisadas += naoIniciados;
+
+    for (const resultado of resultados) {
+      if (resultado.status === "rejected") {
+        iaComFalha += 1;
+        const motivo =
+          resultado.reason instanceof Error
+            ? resultado.reason.message
+            : String(resultado.reason);
+        primeiraFalhaDaIa ??= motivo;
         continue;
       }
+      if (resultado.value.analise) {
+        const analise = resultado.value.analise;
+        analises.set(resultado.value.id, analise);
 
-      const resultados = await Promise.allSettled(
-        lote.map(async (conversation) => {
-          const contato = contacts.find((c) => c.id === conversation.contactId);
-          const analise = await analisarConversa({
-            conversation,
-            contactName: contato?.name ?? "cliente",
-          });
-          return { id: conversation.id, analise };
-        }),
-      );
-
-      for (const resultado of resultados) {
-        if (resultado.status === "rejected") {
-          iaComFalha += 1;
-          const motivo =
-            resultado.reason instanceof Error
-              ? resultado.reason.message
-              : String(resultado.reason);
-          primeiraFalhaDaIa ??= motivo;
-          continue;
-        }
-        if (resultado.value.analise) {
-          const analise = resultado.value.analise;
-          analises.set(resultado.value.id, analise);
-
-          sinaisAceitos += analise.sinais.length;
-          sinaisDescartados += analise.descartados.length;
-          for (const descarte of analise.descartados) {
-            motivosDeDescarte[descarte.motivo] =
-              (motivosDeDescarte[descarte.motivo] ?? 0) + 1;
-          }
+        sinaisAceitos += analise.sinais.length;
+        sinaisDescartados += analise.descartados.length;
+        for (const descarte of analise.descartados) {
+          motivosDeDescarte[descarte.motivo] =
+            (motivosDeDescarte[descarte.motivo] ?? 0) + 1;
         }
       }
     }
