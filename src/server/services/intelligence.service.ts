@@ -99,6 +99,50 @@ export interface AnalysisCoverage {
   teto: number;
   /** true quando alguma conversa do periodo ficou de fora. */
   truncado: boolean;
+  /** true quando a analise parou por tempo, e nao por ter terminado. */
+  interrompidaPorTempo: boolean;
+  /** Milissegundos gastos em cada fase, para diagnostico. */
+  tempos: Record<string, number>;
+}
+
+/**
+ * Orcamento de tempo para as fases que fazem N chamadas.
+ *
+ * A funcao roda em ambiente serverless com limite de execucao. Sem orcamento,
+ * uma conta movimentada leva a rota a ser morta no meio e a resposta vira um
+ * erro sem nenhuma informacao — foi o que aconteceu na primeira chamada
+ * contra a conta real. Com orcamento, ela devolve o que conseguiu analisar e
+ * diz que parou por tempo.
+ */
+function orcamentoDeTempoMs(): number {
+  const bruto = Number(process.env["FLW_TEMPO_MAXIMO_MS"]);
+  // Zero e valido e significa "nao gaste tempo em leitura opcional": a
+  // resposta sai so com o que ja estava carregado, dizendo que parou por
+  // tempo. Util para diagnosticar e para desligar a varredura sem mexer em
+  // codigo.
+  return Number.isFinite(bruto) && bruto >= 0 ? Math.floor(bruto) : 25_000;
+}
+
+/** Quantas conversas sao buscadas por vez, entre verificacoes do relogio. */
+const LOTE = 8;
+
+/**
+ * Paginas de mensagens lidas por conversa na analise em massa.
+ *
+ * O padrao do adapter e 8 paginas — apropriado para abrir UMA conversa, e
+ * ruinoso para varrer dezenas: 60 conversas x 8 paginas sao ate 480 chamadas
+ * numa unica requisicao. Para detectar sinais de compra, as primeiras
+ * mensagens ja trazem o pedido original e o essencial do contexto.
+ */
+const PAGINAS_DE_MENSAGEM_NA_VARREDURA = 2;
+
+/** Divide uma lista em lotes de tamanho fixo. */
+function emLotes<T>(itens: T[], tamanho: number): T[][] {
+  const lotes: T[][] = [];
+  for (let i = 0; i < itens.length; i += tamanho) {
+    lotes.push(itens.slice(i, i + tamanho));
+  }
+  return lotes;
 }
 
 /**
@@ -159,6 +203,15 @@ export async function loadOverview(params: {
    */
   const sourceFailures: SourceFailure[] = [];
 
+  const inicio = Date.now();
+  const prazo = inicio + orcamentoDeTempoMs();
+  const tempos: Record<string, number> = {};
+  const marcar = (fase: string, desde: number) => {
+    tempos[fase] = Date.now() - desde;
+  };
+
+  const inicioSnapshots = Date.now();
+
   const [sessionsSettled, contactsSettled, panelsSettled, usersSettled, tagsSettled] =
     await Promise.allSettled([
       sessionsAdapter.list({ accountId, updatedAfter: filters.period.from }),
@@ -167,6 +220,8 @@ export async function loadOverview(params: {
       agentsAdapter.list({ accountId }),
       tagsAdapter.list({ accountId }),
     ]);
+
+  marcar("snapshots", inicioSnapshots);
 
   const sessionsRes = unwrap(sessionsSettled, "Conversas", [], sourceFailures);
   const contactsRes = unwrap(contactsSettled, "Contatos", [], sourceFailures);
@@ -192,9 +247,11 @@ export async function loadOverview(params: {
     .filter((panel) => panel.type === "SALES")
     .map((panel) => panel.id);
 
+  const inicioCards = Date.now();
   const [cardsSettled] = await Promise.allSettled([
     cardsAdapter.listForPanels({ accountId, panelIds: painelDeVendasIds }),
   ]);
+  marcar("cards", inicioCards);
 
   const cardsRes = unwrap(cardsSettled, "Cards do CRM", [], sourceFailures);
 
@@ -233,47 +290,81 @@ export async function loadOverview(params: {
   );
   const selecionadas = porRecencia.slice(0, teto);
 
+  /*
+   * Busca em lotes, conferindo o relogio entre um e outro.
+   *
+   * `Promise.allSettled` sobre a lista inteira nao permite parar no meio: ou
+   * termina, ou a funcao e morta e nada e devolvido. Em lotes, quando o
+   * orcamento acaba, as conversas ja buscadas continuam valendo e as demais
+   * entram na analise sem mensagens — com score reduzido e dito na resposta.
+   */
+  const inicioMensagens = Date.now();
+  const conversations: ConversationSnapshot[] = [];
+  let mensagensComFalha = 0;
+  let interrompidaPorTempo = false;
+  let comMensagens = 0;
+
+  for (const lote of emLotes(selecionadas, LOTE)) {
+    if (Date.now() >= prazo) {
+      interrompidaPorTempo = true;
+      conversations.push(...lote);
+      continue;
+    }
+
+    const resultados = await Promise.allSettled(
+      lote.map(async (session) => {
+        if (session.messages.length > 0) return session;
+
+        const messagesRes = await messagesAdapter.listBySession({
+          accountId,
+          sessionId: session.id,
+          maxPages: PAGINAS_DE_MENSAGEM_NA_VARREDURA,
+        });
+        collect(messagesRes.pendingValidation);
+        return { ...session, messages: messagesRes.data };
+      }),
+    );
+
+    // Uma conversa cujas mensagens nao carregaram e analisada sem elas — o
+    // que resulta em score baixo — em vez de impedir a analise das outras.
+    resultados.forEach((resultado, indice) => {
+      if (resultado.status === "fulfilled") {
+        conversations.push(resultado.value);
+        if (resultado.value.messages.length > 0) comMensagens += 1;
+        return;
+      }
+      mensagensComFalha += 1;
+      const original = lote[indice];
+      if (original) conversations.push(original);
+    });
+  }
+
+  marcar("mensagens", inicioMensagens);
+
   const coverage: AnalysisCoverage = {
     conversasNoPeriodo: sessionsRes.data.length,
-    conversasAnalisadas: selecionadas.length,
+    conversasAnalisadas: comMensagens,
     teto,
     truncado: sessionsRes.data.length > selecionadas.length,
+    interrompidaPorTempo,
+    tempos,
   };
 
   if (coverage.truncado) {
     pending.add(
-      `Analisadas as ${coverage.conversasAnalisadas} conversas mais recentes de ` +
+      `Analisadas as ${selecionadas.length} conversas mais recentes de ` +
         `${coverage.conversasNoPeriodo} no periodo. Reduza o periodo para cobrir ` +
         `tudo, ou aumente FLW_MAX_CONVERSAS se a infraestrutura permitir.`,
     );
   }
 
-  const conversationsSettled = await Promise.allSettled(
-    selecionadas.map(async (session) => {
-      if (session.messages.length > 0) return session;
-
-      const messagesRes = await messagesAdapter.listBySession({
-        accountId,
-        sessionId: session.id,
-      });
-      collect(messagesRes.pendingValidation);
-      return { ...session, messages: messagesRes.data };
-    }),
-  );
-
-  // Uma conversa cujas mensagens nao carregaram e analisada sem elas — o que
-  // resulta em score baixo — em vez de impedir a analise de todas as outras.
-  const conversations: ConversationSnapshot[] = [];
-  let mensagensComFalha = 0;
-
-  for (const [indice, resultado] of conversationsSettled.entries()) {
-    if (resultado.status === "fulfilled") {
-      conversations.push(resultado.value);
-      continue;
-    }
-    mensagensComFalha += 1;
-    const original = selecionadas[indice];
-    if (original) conversations.push(original);
+  if (interrompidaPorTempo) {
+    pending.add(
+      `A analise parou no limite de tempo: ${coverage.conversasAnalisadas} de ` +
+        `${selecionadas.length} conversas tiveram as mensagens lidas. As demais ` +
+        `aparecem com score reduzido. Reduza o periodo ou ajuste ` +
+        `FLW_TEMPO_MAXIMO_MS / FLW_MAX_CONVERSAS.`,
+    );
   }
 
   if (mensagensComFalha > 0) {
@@ -308,19 +399,39 @@ export async function loadOverview(params: {
   ];
 
   if (faltando.length > 0) {
-    const buscados = await Promise.allSettled(
-      faltando.map((contactId) => contactsAdapter.getById({ accountId, contactId })),
-    );
-
+    const inicioContatos = Date.now();
     let contatosComFalha = 0;
-    for (const resultado of buscados) {
-      if (resultado.status === "rejected") {
-        contatosComFalha += 1;
+    let contatosNaoBuscados = 0;
+
+    for (const lote of emLotes(faltando, LOTE)) {
+      if (Date.now() >= prazo) {
+        contatosNaoBuscados += lote.length;
         continue;
       }
-      collect(resultado.value.pendingValidation);
-      const contato = resultado.value.data;
-      if (contato) contatosPorId.set(contato.id, contato);
+
+      const buscados = await Promise.allSettled(
+        lote.map((contactId) => contactsAdapter.getById({ accountId, contactId })),
+      );
+
+      for (const resultado of buscados) {
+        if (resultado.status === "rejected") {
+          contatosComFalha += 1;
+          continue;
+        }
+        collect(resultado.value.pendingValidation);
+        const contato = resultado.value.data;
+        if (contato) contatosPorId.set(contato.id, contato);
+      }
+    }
+
+    marcar("contatos", inicioContatos);
+
+    if (contatosNaoBuscados > 0) {
+      coverage.interrompidaPorTempo = true;
+      pending.add(
+        `${contatosNaoBuscados} contato(s) nao foram carregados por limite de ` +
+          `tempo. Essas oportunidades aparecem sem etiquetas nem historico.`,
+      );
     }
 
     if (contatosComFalha > 0) {

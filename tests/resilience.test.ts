@@ -5,6 +5,7 @@ import { panelsAdapter, cardsAdapter } from "@/server/integration/adapters";
 import { ApiError } from "@/server/integration/http/client";
 import { resolvePeriod } from "@/server/security/tenant-context";
 import type { TenantContext } from "@/domain/types";
+import { MOCK_CONVERSATIONS } from "@/mocks/dataset";
 import {
   getEnv,
   getIntegrationReadiness,
@@ -281,5 +282,107 @@ describe("configuracao de ambiente", () => {
     comAmbiente({ FLW_API_TOKEN: "pn_x", FLW_DATA_MODE: "mock" }, () => {
       assert.equal(getEnv().dataMode, "mock");
     });
+  });
+});
+
+/**
+ * Limites de trabalho por requisicao.
+ *
+ * A primeira chamada real de /api/intelligence/overview nao devolveu nada:
+ * estourou o tempo limite. A causa era estrutural — a API entrega as
+ * mensagens por conversa, e o adapter lia ate 8 paginas de cada uma, o que
+ * numa conta movimentada vira centenas de chamadas numa unica requisicao.
+ *
+ * O modulo passa a trabalhar com teto e com prazo. O que estes testes
+ * protegem nao e a velocidade, e a HONESTIDADE: quando nao da para analisar
+ * tudo, a resposta precisa sair mesmo assim e dizer o que ficou de fora.
+ */
+describe("Central respeita teto e prazo", () => {
+  /** Troca uma variavel de ambiente e devolve como restaura-la. */
+  function comAmbiente(nome: string, valor: string): () => void {
+    const anterior = process.env[nome];
+    process.env[nome] = valor;
+    return () => {
+      if (anterior === undefined) delete process.env[nome];
+      else process.env[nome] = anterior;
+    };
+  }
+
+  it("analisa no maximo o teto de conversas e avisa o que ficou de fora", async () => {
+    const restaurar = comAmbiente("FLW_MAX_CONVERSAS", "2");
+
+    try {
+      const overview = await loadOverview({ context: contexto, filters: filtros });
+
+      assert.equal(overview.coverage.teto, 2);
+      assert.ok(
+        overview.coverage.conversasNoPeriodo > 2,
+        "o cenario precisa ter mais conversas que o teto para o teste valer",
+      );
+      assert.equal(overview.coverage.truncado, true);
+      assert.ok(
+        overview.pendingValidation.some((m) => m.includes("conversas mais recentes")),
+        "quem le a tela precisa saber que a analise foi parcial",
+      );
+    } finally {
+      restaurar();
+    }
+  });
+
+  it("prioriza as conversas mais recentes quando precisa escolher", async () => {
+    const restaurar = comAmbiente("FLW_MAX_CONVERSAS", "1");
+
+    try {
+      const overview = await loadOverview({ context: contexto, filters: filtros });
+      const analisada = overview.opportunities[0];
+
+      // A unica conversa analisada precisa ser a mais recente do periodo.
+      const maisRecente = [...MOCK_CONVERSATIONS]
+        .filter((c) => c.accountId === contexto.accountId)
+        .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt))[0];
+
+      assert.ok(maisRecente);
+      if (analisada) {
+        assert.equal(
+          analisada.sessionId,
+          maisRecente.id,
+          "uma conversa de hoje diz mais sobre o que fazer agora do que uma antiga",
+        );
+      }
+    } finally {
+      restaurar();
+    }
+  });
+
+  it("devolve resposta mesmo com o prazo ja esgotado, dizendo que parou por tempo", async () => {
+    const restaurar = comAmbiente("FLW_TEMPO_MAXIMO_MS", "0");
+
+    try {
+      const overview = await loadOverview({ context: contexto, filters: filtros });
+
+      assert.equal(overview.coverage.interrompidaPorTempo, true);
+      assert.equal(
+        overview.coverage.conversasAnalisadas,
+        0,
+        "sem tempo, nenhuma conversa tem as mensagens lidas",
+      );
+      assert.ok(
+        overview.pendingValidation.some((m) => m.includes("limite de tempo")),
+        "parar por tempo precisa aparecer na tela, nao virar silencio",
+      );
+    } finally {
+      restaurar();
+    }
+  });
+
+  it("registra o tempo de cada fase, para diagnostico", async () => {
+    const overview = await loadOverview({ context: contexto, filters: filtros });
+
+    for (const fase of ["snapshots", "cards", "mensagens"]) {
+      assert.ok(
+        typeof overview.coverage.tempos[fase] === "number",
+        `a fase "${fase}" precisa ser medida`,
+      );
+    }
   });
 });

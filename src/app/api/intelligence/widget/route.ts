@@ -18,6 +18,12 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+/**
+ * A analise le N conversas, cada uma com sua propria chamada de mensagens.
+ * O servico ja se autolimita por orcamento de tempo (FLW_TEMPO_MAXIMO_MS);
+ * este teto e a rede de seguranca da plataforma, acima daquele.
+ */
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
