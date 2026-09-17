@@ -34,7 +34,7 @@ import {
   filterByVisibility,
 } from "./opportunity.service";
 import { buildQualityReport } from "./quality.service";
-import { aiHabilitada } from "@/server/ai/client";
+import { aiHabilitada, getModelo } from "@/server/ai/client";
 import {
   analisarConversa,
   type ResultadoDaAnalise,
@@ -81,6 +81,33 @@ export interface IntelligenceOverview {
   sourceFailures: SourceFailure[];
   /** Quanto do periodo coube nesta analise. */
   coverage: AnalysisCoverage;
+  /** Como a leitura por IA se comportou. Ausente quando ela nao esta ligada. */
+  aiStats?: AiStats;
+}
+
+/**
+ * Integridade da leitura por IA.
+ *
+ * `sinaisDescartados` e o numero que importa acompanhar: e quanto o modelo
+ * tentou afirmar sem conseguir apontar onde na conversa aquilo foi dito. Zero
+ * significa que ele se ateve ao texto. Um numero que cresce e sinal de que o
+ * prompt afrouxou ou o modelo mudou — e como a barreira de verificacao roda
+ * ANTES de qualquer coisa chegar a tela, o efeito nunca e uma oportunidade
+ * falsa; e uma oportunidade a menos, que e o lado certo para errar.
+ *
+ * Sem esta contagem visivel, a barreira funcionaria em silencio e ninguem
+ * saberia se ela esta sendo exercitada ou se virou codigo morto.
+ */
+export interface AiStats {
+  /** Conversas que a IA efetivamente leu. */
+  conversasLidas: number;
+  /** Conversas que ficaram so com a deteccao deterministica. */
+  conversasSemIa: number;
+  sinaisAceitos: number;
+  sinaisDescartados: number;
+  /** Quantos descartes por motivo. */
+  motivosDeDescarte: Record<string, number>;
+  modelo: string;
 }
 
 /**
@@ -525,6 +552,9 @@ export async function loadOverview(params: {
   let iaComFalha = 0;
   let iaNaoAnalisadas = 0;
   let primeiraFalhaDaIa: string | undefined;
+  let sinaisAceitos = 0;
+  let sinaisDescartados = 0;
+  const motivosDeDescarte: Record<string, number> = {};
 
   if (aiHabilitada()) {
     for (const lote of emLotes(inScope, LOTE_IA)) {
@@ -555,7 +585,15 @@ export async function loadOverview(params: {
           continue;
         }
         if (resultado.value.analise) {
-          analises.set(resultado.value.id, resultado.value.analise);
+          const analise = resultado.value.analise;
+          analises.set(resultado.value.id, analise);
+
+          sinaisAceitos += analise.sinais.length;
+          sinaisDescartados += analise.descartados.length;
+          for (const descarte of analise.descartados) {
+            motivosDeDescarte[descarte.motivo] =
+              (motivosDeDescarte[descarte.motivo] ?? 0) + 1;
+          }
         }
       }
     }
@@ -571,6 +609,14 @@ export async function loadOverview(params: {
           `Elas foram analisadas apenas pela detecção determinística. ` +
           `Primeira falha: ${primeiraFalhaDaIa ?? "desconhecida"}`,
       });
+    }
+
+    if (sinaisDescartados > 0) {
+      pending.add(
+        `A IA citou ${sinaisDescartados} trecho(s) que nao existem nas conversas; ` +
+          `esses sinais foram descartados antes de chegar a tela. ` +
+          `${sinaisAceitos} sinal(is) com evidencia verificada foram aceitos.`,
+      );
     }
 
     if (iaNaoAnalisadas > 0) {
@@ -711,6 +757,18 @@ export async function loadOverview(params: {
     pendingValidation: [...pending],
     sourceFailures,
     coverage,
+    ...(aiHabilitada()
+      ? {
+          aiStats: {
+            conversasLidas: analises.size,
+            conversasSemIa: inScope.length - analises.size,
+            sinaisAceitos,
+            sinaisDescartados,
+            motivosDeDescarte,
+            modelo: getModelo(),
+          },
+        }
+      : {}),
   };
 }
 
