@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { MappingReport } from "@/server/integration/mappers/tolerant";
 import { mapAgent } from "@/server/integration/adapters/agents.adapter";
-import { mapPanel } from "@/server/integration/adapters/panels.adapter";
+import { mapPanel, stepsFromCards } from "@/server/integration/adapters/panels.adapter";
 import { mapSession } from "@/server/integration/adapters/sessions.adapter";
+import { recomendarEtapa } from "@/server/services/opportunity.service";
 
 /**
  * Contrato dos payloads REAIS da API KlipFlowi.
@@ -205,5 +206,68 @@ describe("payload real de /crm/v2/panel", () => {
       painel?.steps.map((s) => s.name),
       ["Proposta Quente", "Visita", "Ordem de Compra"],
     );
+  });
+});
+
+describe("etapas deduzidas dos cards", () => {
+  /**
+   * A API devolve `steps: null` nos painéis de vendas desta conta — tanto na
+   * listagem quanto no detalhe. Os cards, porém, trazem stepId, stepTitle e
+   * stepPhase. Deduzir dali é a única fonte disponível; sem isso o funil
+   * apareceria vazio e ninguém receberia sugestão de próxima etapa.
+   */
+  function card(over: Partial<CrmCard>): CrmCard {
+    return {
+      id: "card_x",
+      accountId: CONTA,
+      panelId: "panel_1",
+      stepId: "step_1",
+      title: "Card",
+      contactIds: [],
+      status: "OPEN",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      ...over,
+    };
+  }
+
+  it("monta uma etapa por stepId distinto, com nome e fase do card", () => {
+    const steps = stepsFromCards([
+      card({ id: "a", stepId: "s1", stepName: "Proposta Quente", stepPhase: "INITIAL" }),
+      card({ id: "b", stepId: "s2", stepName: "Ordem de Compra", stepPhase: "NONE" }),
+      card({ id: "c", stepId: "s1", stepName: "Proposta Quente", stepPhase: "INITIAL" }),
+    ]);
+
+    assert.equal(steps.length, 2, "tres cards em duas etapas viram duas etapas");
+    assert.deepEqual(
+      steps.map((s) => s.name),
+      ["Proposta Quente", "Ordem de Compra"],
+    );
+    assert.equal(steps[0]?.phase, "INITIAL", "a fase precisa sobreviver: decide ganho/perda");
+  });
+
+  it("nao inventa etapa a partir de card sem stepId", () => {
+    const steps = stepsFromCards([card({ id: "a", stepId: "" })]);
+    assert.deepEqual(steps, []);
+  });
+
+  it("devolve lista vazia quando nao ha card algum", () => {
+    assert.deepEqual(stepsFromCards([]), []);
+  });
+
+  /**
+   * A fase FINAL vinda dos cards é o que impede a recomendação de sugerir
+   * "mover para Ganho". Se ela se perdesse na dedução, a IA passaria a
+   * propor marcar vendas como ganhas sozinha.
+   */
+  it("preserva a fase FINAL, para que a recomendacao nunca sugira ganho/perda", () => {
+    const steps = stepsFromCards([
+      card({ id: "a", stepId: "s1", stepName: "Negociacao", stepPhase: "NONE" }),
+      card({ id: "b", stepId: "s2", stepName: "Entregue", stepPhase: "FINAL" }),
+    ]);
+
+    const escolhida = recomendarEtapa({ steps, estagio: "NEGOCIACAO" });
+    assert.equal(escolhida?.name, "Negociacao");
+    assert.notEqual(escolhida?.name, "Entregue");
   });
 });

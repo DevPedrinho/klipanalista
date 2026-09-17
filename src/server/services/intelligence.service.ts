@@ -23,6 +23,7 @@ import {
   sessionsAdapter,
   tagsAdapter,
 } from "@/server/integration/adapters";
+import { stepsFromCards } from "@/server/integration/adapters/panels.adapter";
 import { shouldUseMock, type AdapterResult } from "@/server/integration/adapters/base";
 import { ApiError } from "@/server/integration/http/client";
 import { detectSignals } from "@/server/scoring/signals";
@@ -271,8 +272,34 @@ export async function loadOverview(params: {
   collect(usersRes.pendingValidation);
   collect(tagsRes.pendingValidation);
 
-  const panels = panelsRes.data;
   const cards = cardsRes.data;
+
+  /*
+   * Etapas do funil deduzidas dos cards, quando o painel nao as traz.
+   *
+   * A API devolve `steps: null` nos dois paineis de vendas desta conta —
+   * tanto na listagem quanto no detalhe. Sem isto, o funil apareceria vazio
+   * e nenhuma oportunidade receberia sugestao de proxima etapa: a Central
+   * perderia uma das seis abas sem dizer por que.
+   *
+   * O que a deducao NAO faz, e precisa ser dito: etapa sem nenhum card nao
+   * aparece, e a ordem entre etapas e apenas a de aparicao.
+   */
+  const panels = panelsRes.data.map((panel) => {
+    if (panel.steps.length > 0) return panel;
+
+    const doPainel = cards.filter((card) => card.panelId === panel.id);
+    const deduzidas = stepsFromCards(doPainel);
+    if (deduzidas.length === 0) return panel;
+
+    pending.add(
+      `Painel "${panel.name}": a API nao devolveu as etapas, entao elas foram ` +
+        `deduzidas dos ${doPainel.length} card(s) existentes. Etapas sem nenhum ` +
+        `card nao aparecem, e a ordem entre elas e a de aparicao.`,
+    );
+
+    return { ...panel, steps: deduzidas };
+  });
   const users = usersRes.data;
   const settings = getSettings(accountId);
 

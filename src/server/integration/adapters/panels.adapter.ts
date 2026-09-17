@@ -1,6 +1,6 @@
 import "server-only";
 import type { PanelType } from "@/domain/enums";
-import type { LossReason, Panel, PanelStep } from "@/domain/types";
+import type { CrmCard, LossReason, Panel, PanelStep, StepPhase } from "@/domain/types";
 import { MOCK_LOSS_REASONS, MOCK_PANELS, findPanel } from "@/mocks/dataset";
 import { ENDPOINTS } from "../endpoints";
 import { apiRequest, apiRequestAllPages } from "../http/client";
@@ -49,6 +49,49 @@ function mapStep(raw: unknown, index: number, report: MappingReport): PanelStep 
     name: readString(raw, ["name", "title", "label"], "panelStep.name", report) ?? `Etapa ${index + 1}`,
     order: readNumber(raw, ["order", "position", "index", "sequence"], "panelStep.order", report) ?? index,
   };
+}
+
+/**
+ * Reconstroi as etapas do funil a partir dos CARDS do painel.
+ *
+ * Nao e preferencia: e a unica fonte disponivel nesta conta. A listagem
+ * (/crm/v2/panel) e o detalhe (/crm/v1/panel/{id}) devolvem `steps: null` e
+ * `stepTitles: null` nos dois paineis de vendas — confirmado pela sonda. Sem
+ * isto, o funil apareceria vazio e nenhuma oportunidade receberia sugestao
+ * de proxima etapa.
+ *
+ * Os cards, por outro lado, trazem `stepId`, `stepTitle` e `stepPhase`
+ * (CONFIRMADOS no payload real), que e exatamente o que define uma etapa.
+ *
+ * LIMITACAO, e ela precisa ser dita a quem le a tela: uma etapa sem nenhum
+ * card nao aparece aqui, porque nao ha de onde deduzi-la. A ORDEM tambem e
+ * inferida — de `position` dos cards, que reflete a posicao dentro da etapa
+ * e nao a ordem das etapas entre si —, entao serve para agrupar, nao para
+ * afirmar qual etapa vem antes de qual.
+ */
+export function stepsFromCards(cards: CrmCard[]): PanelStep[] {
+  const porEtapa = new Map<string, { name: string; phase?: StepPhase; primeiro: number }>();
+
+  cards.forEach((card, indice) => {
+    if (!card.stepId) return;
+    const existente = porEtapa.get(card.stepId);
+    if (existente) return;
+
+    porEtapa.set(card.stepId, {
+      name: card.stepName ?? "Etapa sem nome",
+      ...(card.stepPhase === undefined ? {} : { phase: card.stepPhase }),
+      primeiro: indice,
+    });
+  });
+
+  return [...porEtapa.entries()]
+    .sort((a, b) => a[1].primeiro - b[1].primeiro)
+    .map(([id, dados], indice) => ({
+      id,
+      name: dados.name,
+      order: indice,
+      ...(dados.phase === undefined ? {} : { phase: dados.phase }),
+    }));
 }
 
 export function mapPanel(raw: unknown, accountId: string, report: MappingReport): Panel | null {
