@@ -73,6 +73,44 @@ export interface IntelligenceOverview {
    * que o diagnostico mais importa: a primeira conexao com a API real.
    */
   sourceFailures: SourceFailure[];
+  /** Quanto do periodo coube nesta analise. */
+  coverage: AnalysisCoverage;
+}
+
+/**
+ * Abrangencia da analise.
+ *
+ * A API nao devolve as mensagens junto com a lista de conversas: e uma
+ * chamada POR conversa. Analisar um periodo inteiro de uma conta movimentada
+ * significaria centenas de chamadas em uma unica requisicao — foi assim que
+ * a primeira tentativa contra a conta real estourou o tempo limite sem
+ * devolver nada.
+ *
+ * Em vez de tentar tudo e falhar, o modulo analisa as conversas mais
+ * recentes ate um teto e DIZ o que ficou de fora. Meia resposta honesta vale
+ * mais do que uma tela de erro.
+ */
+export interface AnalysisCoverage {
+  /** Conversas encontradas no periodo. */
+  conversasNoPeriodo: number;
+  /** Conversas efetivamente analisadas com as mensagens. */
+  conversasAnalisadas: number;
+  /** Teto aplicado nesta execucao. */
+  teto: number;
+  /** true quando alguma conversa do periodo ficou de fora. */
+  truncado: boolean;
+}
+
+/**
+ * Teto de conversas analisadas por requisicao.
+ *
+ * 60 conversas ~ 60 chamadas de mensagens, que o limitador de vazao entrega
+ * em poucos segundos. Ajustavel por ambiente para contas maiores rodando em
+ * infraestrutura com mais tempo de execucao.
+ */
+function tetoDeConversas(): number {
+  const bruto = Number(process.env["FLW_MAX_CONVERSAS"]);
+  return Number.isFinite(bruto) && bruto > 0 ? Math.floor(bruto) : 60;
 }
 
 /** Dias sem movimentacao a partir dos quais um card conta como parado. */
@@ -176,17 +214,42 @@ export async function loadOverview(params: {
   collect(usersRes.pendingValidation);
   collect(tagsRes.pendingValidation);
 
-  const contacts = contactsRes.data;
   const panels = panelsRes.data;
   const cards = cardsRes.data;
   const users = usersRes.data;
   const settings = getSettings(accountId);
 
-  /* --- Carrega mensagens de cada conversa -------------------------------- */
-  // No modo simulado as mensagens ja vem embutidas; no modo real sao buscadas
-  // por conversa, respeitando o rate limit do cliente HTTP.
+  /* --- Carrega mensagens de cada conversa --------------------------------
+   * No modo simulado as mensagens ja vem embutidas; no modo real sao buscadas
+   * POR CONVERSA — a API nao tem como devolver as mensagens de varias de uma
+   * vez. Isso torna o custo proporcional ao numero de conversas, entao o
+   * trabalho e limitado a um teto, priorizando as mais recentes: uma conversa
+   * de hoje diz mais sobre o que fazer agora do que uma de tres semanas atras.
+   */
+  const teto = tetoDeConversas();
+
+  const porRecencia = [...sessionsRes.data].sort(
+    (a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt),
+  );
+  const selecionadas = porRecencia.slice(0, teto);
+
+  const coverage: AnalysisCoverage = {
+    conversasNoPeriodo: sessionsRes.data.length,
+    conversasAnalisadas: selecionadas.length,
+    teto,
+    truncado: sessionsRes.data.length > selecionadas.length,
+  };
+
+  if (coverage.truncado) {
+    pending.add(
+      `Analisadas as ${coverage.conversasAnalisadas} conversas mais recentes de ` +
+        `${coverage.conversasNoPeriodo} no periodo. Reduza o periodo para cobrir ` +
+        `tudo, ou aumente FLW_MAX_CONVERSAS se a infraestrutura permitir.`,
+    );
+  }
+
   const conversationsSettled = await Promise.allSettled(
-    sessionsRes.data.map(async (session) => {
+    selecionadas.map(async (session) => {
       if (session.messages.length > 0) return session;
 
       const messagesRes = await messagesAdapter.listBySession({
@@ -209,7 +272,7 @@ export async function loadOverview(params: {
       continue;
     }
     mensagensComFalha += 1;
-    const original = sessionsRes.data[indice];
+    const original = selecionadas[indice];
     if (original) conversations.push(original);
   }
 
@@ -219,10 +282,60 @@ export async function loadOverview(params: {
       kind: "PARCIAL",
       message:
         `Nao foi possivel carregar as mensagens de ${mensagensComFalha} de ` +
-        `${sessionsRes.data.length} conversa(s). Elas aparecem com score reduzido ` +
+        `${selecionadas.length} conversa(s). Elas aparecem com score reduzido ` +
         `por falta de conteudo para analisar.`,
     });
   }
+
+  /* --- Completa os contatos das conversas analisadas ---------------------
+   * A listagem de contatos e paginada e limitada: em uma conta com milhares
+   * de contatos, o contato da conversa que estamos analisando pode
+   * simplesmente nao estar na parte que foi lida. O sintoma seria pessimo e
+   * discreto — o card apareceria como "Contato", sem etiquetas e sem
+   * historico, como se o cliente fosse novo.
+   *
+   * Entao, para as conversas selecionadas, o que faltar e buscado por id.
+   * O custo e limitado pelo mesmo teto das conversas.
+   */
+  const contatosPorId = new Map(contactsRes.data.map((contact) => [contact.id, contact]));
+
+  const faltando = [
+    ...new Set(
+      conversations
+        .map((c) => c.contactId)
+        .filter((id): id is string => Boolean(id) && !contatosPorId.has(id)),
+    ),
+  ];
+
+  if (faltando.length > 0) {
+    const buscados = await Promise.allSettled(
+      faltando.map((contactId) => contactsAdapter.getById({ accountId, contactId })),
+    );
+
+    let contatosComFalha = 0;
+    for (const resultado of buscados) {
+      if (resultado.status === "rejected") {
+        contatosComFalha += 1;
+        continue;
+      }
+      collect(resultado.value.pendingValidation);
+      const contato = resultado.value.data;
+      if (contato) contatosPorId.set(contato.id, contato);
+    }
+
+    if (contatosComFalha > 0) {
+      sourceFailures.push({
+        source: "Contatos",
+        kind: "PARCIAL",
+        message:
+          `Nao foi possivel carregar ${contatosComFalha} contato(s) referenciado(s) ` +
+          `pelas conversas analisadas. Essas oportunidades aparecem sem etiquetas ` +
+          `nem historico do cliente.`,
+      });
+    }
+  }
+
+  const contacts = [...contatosPorId.values()];
 
   /* --- Aplica filtros de periodo, equipe e vendedor ---------------------- */
   const periodFrom = Date.parse(filters.period.from);
@@ -358,6 +471,7 @@ export async function loadOverview(params: {
     dataMode: shouldUseMock() ? "mock" : "live",
     pendingValidation: [...pending],
     sourceFailures,
+    coverage,
   };
 }
 
