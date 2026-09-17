@@ -289,7 +289,14 @@ export function IntelligenceCenter({
             preview: data.preview,
           });
         } else {
-          setToast({ tone: "success", text: data.notice ?? "Ação registrada." });
+          // Verde só quando executou de verdade. Este caminho é o do modo
+          // automático controlado, onde não há confirmação — e desde que as
+          // etiquetas passaram a escrever na API, ele também pode falhar.
+          // Um aviso de falha com tom de sucesso é pior que nenhum aviso.
+          setToast({
+            tone: data.status === "EXECUTADA" ? "success" : "warning",
+            text: data.notice ?? "Ação registrada.",
+          });
           reload({ silent: true });
         }
       } catch (caught) {

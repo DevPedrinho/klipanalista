@@ -1,7 +1,11 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { ACTION_TYPES } from "@/domain/enums";
-import { agentsAdapter, tagsAdapter } from "@/server/integration/adapters";
+import { agentsAdapter, contactsAdapter, tagsAdapter } from "@/server/integration/adapters";
+import {
+  aplicarEtiquetas,
+  type ResultadoDaExecucao,
+} from "@/server/services/tag-application.service";
 import { fail, failValidation, handleError, ok } from "@/server/http/respond";
 import { recordAudit } from "@/server/services/audit.service";
 import {
@@ -22,12 +26,24 @@ import {
  *
  * Prepara uma acao sugerida pela IA e devolve a PREVIA do que aconteceria.
  *
- * IMPORTANTE — PRIMEIRA ENTREGA:
- * Esta rota NAO executa escrita na API da KlipFlowi. Ela sempre opera em
- * modo de simulacao (`dryRun`), registra a intencao na auditoria e devolve
- * o diff proposto para a tela de confirmacao. A execucao real sera ligada
- * somente depois que os contratos de escrita forem confirmados na
+ * ESCRITA REAL — hoje so APLICAR_ETIQUETAS.
+ *
+ * Todas as demais acoes continuam em simulacao: registram a intencao na
+ * auditoria e devolvem o diff proposto, sem tocar a API. Elas serao ligadas
+ * uma a uma, conforme cada contrato de escrita for confirmado na
  * documentacao (ver src/server/integration/endpoints.ts).
+ *
+ * As etiquetas vieram primeiro porque sao a acao de menor risco com o
+ * contrato mais solido: o endpoint aparece com URL literal na documentacao,
+ * a operacao enviada e `InsertIfNotExists` (apenas acrescenta — nunca apaga
+ * o que a equipe marcou a mao), e o efeito e reversivel em um clique dentro
+ * da propria KlipFlowi.
+ *
+ * Tres travas continuam valendo para ela:
+ *   1. o modo de automacao decide (OBSERVADOR bloqueia);
+ *   2. no modo Copiloto uma pessoa confirma antes;
+ *   3. so entram etiquetas que JA existem na conta — criar exige aprovacao
+ *      administrativa, e a IA nunca cria por conta propria.
  */
 
 export const dynamic = "force-dynamic";
@@ -154,7 +170,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    /* --- Execucao: simulada nesta entrega -------------------------------- */
+    /* --- Execucao ---------------------------------------------------------- */
     const preview = await buildPreview({
       accountId: context.accountId,
       opportunity,
@@ -166,42 +182,65 @@ export async function POST(request: NextRequest) {
     const isLocalOnly =
       input.actionType === "MARCAR_ANALISADA" || input.actionType === "IGNORAR_RECOMENDACAO";
 
+    const resultado: ResultadoDaExecucao = isLocalOnly
+      ? {
+          status: "EXECUTADA",
+          apiResult: { ok: true, message: "Acao local, sem chamada a API." },
+          notice: "Acao registrada localmente.",
+        }
+      : input.actionType === "APLICAR_ETIQUETAS"
+        ? await aplicarEtiquetas({
+            accountId: context.accountId,
+            contactId: opportunity.contactId,
+            contactName: opportunity.contactName,
+            tagKeys: opportunity.recommendedTagKeys,
+          })
+        : {
+            status: "SIMULADA",
+            apiResult: {
+              ok: false,
+              message:
+                "Escrita na API nao executada: contratos de escrita ainda pendentes de validacao.",
+            },
+            notice:
+              "Esta acao foi apenas simulada. Nenhum dado foi alterado na KlipFlowi: " +
+              "os contratos de escrita da API ainda precisam ser confirmados na documentacao.",
+          };
+
     const entry = recordAudit({
       accountId: context.accountId,
       requestedByUserId: context.userId,
       requestedByName: requester?.name ?? context.userId,
       actionType: input.actionType,
-      actionStatus: isLocalOnly ? "EXECUTADA" : "APROVADA",
+      actionStatus:
+        resultado.status === "EXECUTADA"
+          ? "EXECUTADA"
+          : resultado.status === "FALHOU"
+            ? "FALHOU"
+            : "APROVADA",
       targetKind: "OPORTUNIDADE",
       targetId: opportunity.id,
       targetLabel: opportunity.contactName,
       suggestion: ACTION_LABELS[input.actionType],
       evidenceCodes: opportunity.evidence.map((e) => e.code),
       before: preview.before,
-      after: preview.after,
+      // Quando a acao mexeu de verdade, o "depois" da auditoria e o que a API
+      // devolveu — nao o que pretendiamos fazer.
+      after: resultado.depois ?? preview.after,
       aiConfidence: opportunity.confidence,
       automationMode: settings.automationMode,
-      apiResult: isLocalOnly
-        ? { ok: true, message: "Acao local, sem chamada a API." }
-        : {
-            ok: false,
-            message:
-              "Escrita na API nao executada: contratos de escrita ainda pendentes de validacao.",
-          },
-      success: isLocalOnly,
+      apiResult: resultado.apiResult,
+      success: resultado.status === "EXECUTADA",
       approvedByUserId: input.confirmed ? context.userId : undefined,
       approvedByName: input.confirmed ? requester?.name : undefined,
     });
 
     return ok(
       {
-        status: isLocalOnly ? "EXECUTADA" : "SIMULADA",
+        status: resultado.status,
         auditId: entry.id,
         preview,
-        notice: isLocalOnly
-          ? "Acao registrada localmente."
-          : "Esta acao foi apenas simulada. Nenhum dado foi alterado na KlipFlowi: " +
-            "os contratos de escrita da API ainda precisam ser confirmados na documentacao.",
+        notice: resultado.notice,
       },
       { dataMode: overview.dataMode, pendingValidation: overview.pendingValidation },
     );
@@ -244,8 +283,39 @@ async function buildPreview(params: {
         );
       }
 
+      /*
+       * O "antes" agora e o estado REAL do contato.
+       *
+       * Enquanto a acao era simulada, um texto generico bastava. Agora que
+       * ela escreve de verdade, quem confirma precisa ver o que ja esta la:
+       * e a diferenca entre aprovar uma mudanca e aprovar uma promessa. Se a
+       * consulta falhar, a previa continua — perder o "antes" nao pode
+       * impedir a acao de ser avaliada.
+       */
+      const atuais = await contactsAdapter
+        .getById({ accountId: params.accountId, contactId: opportunity.contactId })
+        .then((r) => r.data?.tagIds ?? null)
+        .catch(() => null);
+
+      const nomePorId = new Map(existing.data.map((t) => [t.id, t.name]));
+      const jaAplicadas = new Set(atuais ?? []);
+
+      const novas = reused.filter((r) => r.matched && !jaAplicadas.has(r.matched.id));
+
+      if (atuais !== null && novas.length === 0 && reused.length > 0) {
+        warnings.push(
+          "O contato ja tem todas as etiquetas recomendadas. A operacao e aditiva, " +
+            "entao nada mudaria.",
+        );
+      }
+
       return {
-        before: { etiquetasAtuais: "(consultadas no contato)" },
+        before: {
+          etiquetasAtuais:
+            atuais === null
+              ? "(nao foi possivel consultar o contato)"
+              : atuais.map((id) => nomePorId.get(id) ?? id),
+        },
         after: {
           etiquetasReutilizadas: reused.map((r) => ({
             nome: r.matched?.name,
