@@ -70,28 +70,68 @@ function mapStep(raw: unknown, index: number, report: MappingReport): PanelStep 
  * afirmar qual etapa vem antes de qual.
  */
 export function stepsFromCards(cards: CrmCard[]): PanelStep[] {
-  const porEtapa = new Map<string, { name: string; phase?: StepPhase; primeiro: number }>();
+  interface Acumulado {
+    name?: string;
+    phase?: StepPhase;
+    primeiro: number;
+    abertos: number;
+    encerrados: number;
+  }
+
+  const porEtapa = new Map<string, Acumulado>();
 
   cards.forEach((card, indice) => {
     if (!card.stepId) return;
-    const existente = porEtapa.get(card.stepId);
-    if (existente) return;
 
-    porEtapa.set(card.stepId, {
-      name: card.stepName ?? "Etapa sem nome",
-      ...(card.stepPhase === undefined ? {} : { phase: card.stepPhase }),
+    const atual: Acumulado = porEtapa.get(card.stepId) ?? {
       primeiro: indice,
-    });
+      abertos: 0,
+      encerrados: 0,
+    };
+
+    // O nome vem do primeiro card que tiver um: `stepTitle` chega nulo em
+    // parte dos paineis, e uma etapa nomeada e melhor que todas anonimas.
+    if (!atual.name && card.stepName) atual.name = card.stepName;
+
+    // A fase declarada, quando existe, vale mais do que qualquer deducao.
+    if (!atual.phase && card.stepPhase && card.stepPhase !== "NONE") {
+      atual.phase = card.stepPhase;
+    }
+
+    if (card.status === "OPEN") atual.abertos += 1;
+    if (card.status === "WON" || card.status === "LOST") atual.encerrados += 1;
+
+    porEtapa.set(card.stepId, atual);
   });
 
   return [...porEtapa.entries()]
     .sort((a, b) => a[1].primeiro - b[1].primeiro)
-    .map(([id, dados], indice) => ({
-      id,
-      name: dados.name,
-      order: indice,
-      ...(dados.phase === undefined ? {} : { phase: dados.phase }),
-    }));
+    .map(([id, dados], indice) => {
+      /*
+       * Fase deduzida do STATUS dos cards, quando a API nao a declara.
+       *
+       * Isto nao e refinamento: na conta real `stepPhase` chega nulo em
+       * todos os cards, e sem fase nenhuma etapa conta como desfecho. O
+       * resultado seria a IA sugerindo mover um negocio para a coluna de
+       * "Ganho" — dar uma venda por fechada e decisao de pessoa, nunca de
+       * leitura de conversa.
+       *
+       * O criterio e conservador: a etapa so vira FINAL quando TODOS os seus
+       * cards estao encerrados. Um unico card aberto ali significa que a
+       * etapa ainda recebe negociacao em andamento.
+       */
+      const deduzida: StepPhase | undefined =
+        dados.encerrados > 0 && dados.abertos === 0 ? "FINAL" : undefined;
+
+      const phase = dados.phase ?? deduzida;
+
+      return {
+        id,
+        name: dados.name ?? "Etapa sem nome",
+        order: indice,
+        ...(phase === undefined ? {} : { phase }),
+      };
+    });
 }
 
 export function mapPanel(raw: unknown, accountId: string, report: MappingReport): Panel | null {

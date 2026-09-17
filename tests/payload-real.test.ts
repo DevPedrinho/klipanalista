@@ -272,3 +272,83 @@ describe("etapas deduzidas dos cards", () => {
     assert.notEqual(escolhida?.name, "Entregue");
   });
 });
+
+describe("fase da etapa deduzida do status dos cards", () => {
+  /**
+   * Na conta real `stepPhase` chega **nulo** em todos os cards. Sem fase,
+   * nenhuma etapa conta como desfecho e a recomendação passaria a sugerir
+   * mover um negócio para a coluna de "Ganho" — dar uma venda por fechada é
+   * decisão de pessoa, nunca de leitura de conversa.
+   */
+  function card(over: Partial<CrmCard>): CrmCard {
+    return {
+      id: "c",
+      accountId: CONTA,
+      panelId: "panel_1",
+      stepId: "step_1",
+      title: "Card",
+      contactIds: [],
+      status: "OPEN",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      ...over,
+    };
+  }
+
+  it("marca como FINAL a etapa em que todos os cards estao encerrados", () => {
+    const steps = stepsFromCards([
+      card({ id: "1", stepId: "aberta", stepName: "Negociacao", status: "OPEN" }),
+      card({ id: "2", stepId: "ganha", stepName: "Ganho", status: "WON" }),
+      card({ id: "3", stepId: "ganha", stepName: "Ganho", status: "WON" }),
+    ]);
+
+    assert.equal(steps.find((s) => s.id === "ganha")?.phase, "FINAL");
+    assert.equal(steps.find((s) => s.id === "aberta")?.phase, undefined);
+  });
+
+  it("nao marca FINAL a etapa que ainda tem card aberto", () => {
+    const steps = stepsFromCards([
+      card({ id: "1", stepId: "mista", status: "WON" }),
+      card({ id: "2", stepId: "mista", status: "OPEN" }),
+    ]);
+
+    assert.equal(
+      steps[0]?.phase,
+      undefined,
+      "um card aberto significa que a etapa ainda recebe negociacao",
+    );
+  });
+
+  it("a deducao impede a IA de sugerir mover para a coluna de ganho", () => {
+    const steps = stepsFromCards([
+      card({ id: "1", stepId: "prop", stepName: "Proposta", status: "OPEN" }),
+      card({ id: "2", stepId: "fech", stepName: "Fechamento", status: "OPEN" }),
+      card({ id: "3", stepId: "ganho", stepName: "Ganho", status: "WON" }),
+    ]);
+
+    for (const estagio of ["TRIAGEM", "QUALIFICACAO", "PROPOSTA", "NEGOCIACAO"] as const) {
+      assert.notEqual(
+        recomendarEtapa({ steps, estagio })?.name,
+        "Ganho",
+        `estagio ${estagio} nao pode propor dar a venda por fechada`,
+      );
+    }
+  });
+
+  it("a fase declarada pela API prevalece sobre a deducao", () => {
+    const steps = stepsFromCards([
+      card({ id: "1", stepId: "s", stepName: "Entrada", stepPhase: "INITIAL", status: "WON" }),
+    ]);
+
+    assert.equal(steps[0]?.phase, "INITIAL", "o dado real vale mais que a inferencia");
+  });
+
+  it("nomeia a etapa pelo primeiro card que tiver nome", () => {
+    const steps = stepsFromCards([
+      card({ id: "1", stepId: "s" }),
+      card({ id: "2", stepId: "s", stepName: "Visita" }),
+    ]);
+
+    assert.equal(steps[0]?.name, "Visita", "stepTitle chega nulo em parte dos paineis");
+  });
+});
