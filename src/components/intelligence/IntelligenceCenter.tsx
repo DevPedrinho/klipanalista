@@ -26,6 +26,7 @@ import {
   NoIntegrationBanner,
   NoOpportunities,
   PendingValidationBanner,
+  SourceFailuresBanner,
 } from "./StateViews";
 import { apiGet, apiSend, toErrorBody } from "@/lib/api-client";
 import { cx } from "@/lib/format";
@@ -43,6 +44,7 @@ interface OverviewResponse {
   lastAnalysisAt: string;
   dataMode: "mock" | "live";
   pendingValidation: string[];
+  sourceFailures: { source: string; endpoint?: string; kind: string; message: string }[];
   context: { role: string; scope: string };
   integration: { ready: boolean; missing: string[] };
   availableUsers: UserOption[];
@@ -383,6 +385,8 @@ export function IntelligenceCenter({
         {overview && !overview.integration.ready ? (
           <NoIntegrationBanner missing={overview.integration.missing} />
         ) : null}
+
+        {overview ? <SourceFailuresBanner failures={overview.sourceFailures ?? []} /> : null}
 
         {overview ? <PendingValidationBanner items={overview.pendingValidation} /> : null}
 

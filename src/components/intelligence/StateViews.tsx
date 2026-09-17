@@ -193,6 +193,58 @@ export function PendingValidationBanner({ items }: { items: string[] }) {
   );
 }
 
+/**
+ * Fontes que falharam sem derrubar a analise.
+ *
+ * Existe para o momento da primeira conexao com a API real: em vez de uma tela
+ * de erro generica, o usuario ve exatamente qual fonte falhou e por que, e o
+ * resto da Central continua utilizavel.
+ */
+export function SourceFailuresBanner({
+  failures,
+}: {
+  failures: { source: string; endpoint?: string; kind: string; message: string }[];
+}) {
+  if (failures.length === 0) return null;
+
+  const explicacao: Record<string, string> = {
+    NAO_AUTENTICADO: "O token da API foi recusado. Confira FLW_API_TOKEN.",
+    SEM_PERMISSAO: "O token não tem permissão para este recurso.",
+    NAO_ENCONTRADO:
+      "O endereço do endpoint não existe nesta conta. Provavelmente o prefixo de serviço está errado.",
+    LIMITE_REQUISICOES: "Limite de requisições atingido. A fila retoma sozinha.",
+    SEM_INTEGRACAO: "Faltam variáveis de ambiente para esta chamada.",
+    CONTRATO_NAO_VALIDADO: "Este endpoint ainda não foi confirmado na documentação.",
+    TIMEOUT: "A API demorou demais para responder.",
+    ERRO_REDE: "Não foi possível alcançar a API.",
+    PARCIAL: "Parte dos dados não carregou.",
+  };
+
+  return (
+    <Notice tone="warning" title="Parte dos dados não carregou">
+      <p>
+        A análise continuou com o que foi possível obter. O que falhou está abaixo —
+        os números exibidos não incluem essas fontes.
+      </p>
+      <ul className="mt-2 space-y-1.5">
+        {failures.map((f) => (
+          <li key={`${f.source}-${f.kind}`}>
+            <span className="font-semibold">{f.source}</span>
+            {f.endpoint ? (
+              <code className="ml-1.5 rounded bg-surface-card px-1.5 py-0.5 text-[11px]">
+                {f.endpoint}
+              </code>
+            ) : null}
+            <span className="mt-0.5 block text-[12px] opacity-90">
+              {explicacao[f.kind] ?? f.message}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Notice>
+  );
+}
+
 export function NoOpportunities({ onClearFilters }: { onClearFilters: () => void }) {
   return (
     <Card>

@@ -23,7 +23,8 @@ import {
   sessionsAdapter,
   tagsAdapter,
 } from "@/server/integration/adapters";
-import { shouldUseMock } from "@/server/integration/adapters/base";
+import { shouldUseMock, type AdapterResult } from "@/server/integration/adapters/base";
+import { ApiError } from "@/server/integration/http/client";
 import { detectSignals } from "@/server/scoring/signals";
 import { suggestionAcceptanceRate } from "./audit.service";
 import {
@@ -43,6 +44,17 @@ import { getSettings } from "./settings.service";
  * Nenhuma escrita acontece aqui: este servico so LE e ANALISA.
  */
 
+/** Falha isolada de uma das fontes de dados. */
+export interface SourceFailure {
+  /** Nome legivel da fonte, como aparece para o usuario. */
+  source: string;
+  /** Endpoint envolvido, quando identificavel. */
+  endpoint?: string;
+  /** Classificacao do erro, para a interface orientar o que fazer. */
+  kind: string;
+  message: string;
+}
+
 export interface IntelligenceOverview {
   kpis: IntelligenceKpis;
   opportunities: Opportunity[];
@@ -53,10 +65,43 @@ export interface IntelligenceOverview {
   lastAnalysisAt: string;
   dataMode: "mock" | "live";
   pendingValidation: string[];
+  /**
+   * Fontes que falharam sem derrubar a analise.
+   *
+   * A Central carrega seis fontes independentes. Deixar uma falha derrubar
+   * todas produz uma tela de erro que nao diz nada — justamente no momento em
+   * que o diagnostico mais importa: a primeira conexao com a API real.
+   */
+  sourceFailures: SourceFailure[];
 }
 
 /** Dias sem movimentacao a partir dos quais um card conta como parado. */
 const STALLED_DAYS = 7;
+
+/**
+ * Desempacota um resultado de `allSettled`, devolvendo um valor de reserva
+ * quando a fonte falhou e registrando a falha para exibicao.
+ */
+function unwrap<T>(
+  settled: PromiseSettledResult<AdapterResult<T>>,
+  source: string,
+  fallback: T,
+  failures: SourceFailure[],
+): AdapterResult<T> {
+  if (settled.status === "fulfilled") return settled.value;
+
+  const error = settled.reason;
+  const apiError = error instanceof ApiError ? error : undefined;
+
+  failures.push({
+    source,
+    endpoint: apiError?.endpointKey,
+    kind: apiError?.kind ?? "ERRO_INTERNO",
+    message: error instanceof Error ? error.message : String(error),
+  });
+
+  return { data: fallback, source: "live", pendingValidation: [] };
+}
 
 export async function loadOverview(params: {
   context: TenantContext;
@@ -70,8 +115,20 @@ export async function loadOverview(params: {
 
   const collect = (messages: string[]) => messages.forEach((m) => pending.add(m));
 
-  /* --- Carregamento paralelo dos snapshots ------------------------------- */
-  const [sessionsRes, contactsRes, panelsRes, cardsRes, usersRes, tagsRes] = await Promise.all([
+  /* --- Carregamento paralelo dos snapshots -------------------------------
+   * `allSettled` em vez de `all`: se os paineis falharem, ainda queremos
+   * mostrar as oportunidades das conversas, dizendo claramente o que faltou.
+   */
+  const sourceFailures: SourceFailure[] = [];
+
+  const [
+    sessionsSettled,
+    contactsSettled,
+    panelsSettled,
+    cardsSettled,
+    usersSettled,
+    tagsSettled,
+  ] = await Promise.allSettled([
     sessionsAdapter.list({ accountId, updatedAfter: filters.period.from }),
     contactsAdapter.list({ accountId }),
     panelsAdapter.list({ accountId }),
@@ -79,6 +136,22 @@ export async function loadOverview(params: {
     agentsAdapter.list({ accountId }),
     tagsAdapter.list({ accountId }),
   ]);
+
+  const sessionsRes = unwrap(sessionsSettled, "Conversas", [], sourceFailures);
+  const contactsRes = unwrap(contactsSettled, "Contatos", [], sourceFailures);
+  const panelsRes = unwrap(panelsSettled, "Painéis do CRM", [], sourceFailures);
+  const cardsRes = unwrap(cardsSettled, "Cards do CRM", [], sourceFailures);
+  const usersRes = unwrap(usersSettled, "Usuários", [], sourceFailures);
+  const tagsRes = unwrap(tagsSettled, "Etiquetas", [], sourceFailures);
+
+  /*
+   * Sem usuarios nao ha como resolver perfil nem escopo de visibilidade —
+   * e sem isso qualquer resposta seria insegura. Esta e a unica fonte cuja
+   * falha derruba a analise inteira, e de proposito.
+   */
+  if (usersSettled.status === "rejected") {
+    throw usersSettled.reason;
+  }
 
   collect(sessionsRes.pendingValidation);
   collect(contactsRes.pendingValidation);
@@ -96,7 +169,7 @@ export async function loadOverview(params: {
   /* --- Carrega mensagens de cada conversa -------------------------------- */
   // No modo simulado as mensagens ja vem embutidas; no modo real sao buscadas
   // por conversa, respeitando o rate limit do cliente HTTP.
-  const conversations: ConversationSnapshot[] = await Promise.all(
+  const conversationsSettled = await Promise.allSettled(
     sessionsRes.data.map(async (session) => {
       if (session.messages.length > 0) return session;
 
@@ -108,6 +181,32 @@ export async function loadOverview(params: {
       return { ...session, messages: messagesRes.data };
     }),
   );
+
+  // Uma conversa cujas mensagens nao carregaram e analisada sem elas — o que
+  // resulta em score baixo — em vez de impedir a analise de todas as outras.
+  const conversations: ConversationSnapshot[] = [];
+  let mensagensComFalha = 0;
+
+  for (const [indice, resultado] of conversationsSettled.entries()) {
+    if (resultado.status === "fulfilled") {
+      conversations.push(resultado.value);
+      continue;
+    }
+    mensagensComFalha += 1;
+    const original = sessionsRes.data[indice];
+    if (original) conversations.push(original);
+  }
+
+  if (mensagensComFalha > 0) {
+    sourceFailures.push({
+      source: "Mensagens",
+      kind: "PARCIAL",
+      message:
+        `Nao foi possivel carregar as mensagens de ${mensagensComFalha} de ` +
+        `${sessionsRes.data.length} conversa(s). Elas aparecem com score reduzido ` +
+        `por falta de conteudo para analisar.`,
+    });
+  }
 
   /* --- Aplica filtros de periodo, equipe e vendedor ---------------------- */
   const periodFrom = Date.parse(filters.period.from);
@@ -242,6 +341,7 @@ export async function loadOverview(params: {
     lastAnalysisAt: now.toISOString(),
     dataMode: shouldUseMock() ? "mock" : "live",
     pendingValidation: [...pending],
+    sourceFailures,
   };
 }
 

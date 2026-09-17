@@ -15,7 +15,7 @@ Esta é a **primeira entrega**. O que está e o que não está funcionando:
 
 | | Situação |
 |---|---|
-| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 171 testes automatizados** |
+| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 176 testes automatizados** |
 | ✅ Autenticação da API (`Authorization: Bearer pn_...`) | **Confirmada na documentação oficial** |
 | ✅ Caminhos dos endpoints de leitura | **Extraídos do índice oficial da documentação** |
 | 🟡 Dados exibidos | **Simulados.** Nenhuma chamada real à API foi feita ou testada |
@@ -40,7 +40,7 @@ Abra <http://localhost:3000> — a página inicial lista as rotas com a conta de
 Outros comandos:
 
 ```bash
-npm test                # 171 testes automatizados (~1s)
+npm test                # 176 testes automatizados (~1s)
 npm run verify          # typecheck + lint + testes + build — rode antes de publicar
 npm run build           # build de produção
 npm run typecheck       # checagem de tipos
@@ -271,7 +271,7 @@ psql -d flowi_local -f db/migrations/0002_supabase.sql
 npm test
 ```
 
-171 testes em 5 suítes, focados no que causa dano real se quebrar:
+176 testes em 5 suítes, focados no que causa dano real se quebrar:
 
 | Suíte | O que protege |
 |---|---|
@@ -336,7 +336,7 @@ src/
     └── services/              Oportunidades, automação, etiquetas,
                                auditoria, chat, qualidade, fila
 db/migrations/                 0001 esquema · 0002 ajustes do Supabase
-tests/                         171 testes automatizados
+tests/                         176 testes automatizados
 ```
 
 ### Score (0–100)
