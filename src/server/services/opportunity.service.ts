@@ -138,23 +138,67 @@ function extractProductInterest(conversation: ConversationSnapshot): string | un
 /* --------------------------------------------------------------------------
    Valor potencial estimado
    -------------------------------------------------------------------------- */
+/** Le um numero no formato brasileiro: "4.500,00" -> 4500, "4,5" -> 4.5. */
+function lerNumeroBr(bruto: string): number {
+  const limpo = bruto.trim();
+
+  // Virgula com uma ou duas casas no fim e decimal; o ponto e separador de
+  // milhar. "4.500,50" -> 4500.50
+  if (/,\d{1,2}$/.test(limpo)) {
+    return Number(limpo.replace(/\./g, "").replace(",", "."));
+  }
+  return Number(limpo.replace(/[.,]/g, ""));
+}
+
+/**
+ * Valores em dinheiro ditos na conversa.
+ *
+ * A versao anterior so entendia `R$ 1.234`. Isso e cegueira estrutural neste
+ * canal: boa parte desta conta negocia por AUDIO, e ninguem fala "erre
+ * cifrao" — a transcricao escreve "em torno de 4 mil a 5 mil reais". O
+ * cliente dizia o orcamento com todas as letras e o modulo lia `undefined`,
+ * o que zerava o valor potencial no painel e impedia a etiqueta de faixa de
+ * ser sugerida.
+ *
+ * A regra exige uma MARCA DE DINHEIRO junto do numero — `R$`, a unidade
+ * "mil"/"k", ou a palavra "reais"/"conto". Numero solto nao entra, senao
+ * "dia 5, dia 10", "placa X70E" e "Loja 17" viravam orcamento.
+ */
+export function extrairValoresDitos(texto: string): number[] {
+  const valores: number[] = [];
+
+  for (const match of texto.matchAll(/\d[\d.,]*/g)) {
+    const inicio = match.index;
+    if (inicio === undefined) continue;
+
+    const fim = inicio + match[0].length;
+    const antes = texto.slice(Math.max(0, inicio - 4), inicio);
+    const depois = texto.slice(fim, fim + 16);
+
+    const temCifrao = /r\$\s*$/i.test(antes);
+    const unidade = /^\s*(mil|k)\b/i.test(depois);
+    const moeda = /^\s*(?:mil\s*)?(?:reais|real|contos?)\b/i.test(depois);
+
+    if (!temCifrao && !unidade && !moeda) continue;
+
+    let valor = lerNumeroBr(match[0]);
+    if (unidade) valor *= 1000;
+
+    // Centavos soltos e numeros absurdos nao sao orcamento.
+    if (!Number.isFinite(valor) || valor < 1) continue;
+
+    valores.push(valor);
+  }
+
+  return valores;
+}
+
 function extractStatedValue(conversation: ConversationSnapshot): number | undefined {
-  // Procura valores em reais citados na conversa (proposta enviada, etc.).
-  const pattern = /R\$\s*([\d.]+(?:,\d{2})?)/g;
   let best: number | undefined;
 
   for (const message of conversation.messages) {
-    let match: RegExpExecArray | null;
-    pattern.lastIndex = 0;
-
-    while ((match = pattern.exec(message.text)) !== null) {
-      const raw = match[1];
-      if (!raw) continue;
-
-      const value = Number(raw.replace(/\./g, "").replace(",", "."));
-      if (Number.isFinite(value) && value > 0) {
-        best = best === undefined ? value : Math.max(best, value);
-      }
+    for (const valor of extrairValoresDitos(message.text)) {
+      best = best === undefined ? valor : Math.max(best, valor);
     }
   }
   return best;
