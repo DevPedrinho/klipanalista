@@ -86,6 +86,7 @@ export function mapAgent(raw: unknown, accountId: string, report: MappingReport)
   return {
     id,
     accountId,
+    apiAccountId: readString(raw, ["companyId", "accountId"], "agent.companyId", report),
     name: readString(raw, ["name", "fullName", "displayName"], "agent.name", report) ?? "Usuario",
     email: readString(raw, ["email", "mail"], "agent.email", report),
     role: normalizeRole(

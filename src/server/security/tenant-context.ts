@@ -96,7 +96,7 @@ export function resolvePeriod(params: {
 }
 
 export class AccessError extends Error {
-  readonly code: "SEM_PERMISSAO" | "NAO_AUTENTICADO";
+  readonly code: "SEM_PERMISSAO" | "NAO_AUTENTICADO" | "USUARIO_NAO_ENCONTRADO";
   constructor(code: AccessError["code"], message: string) {
     super(message);
     this.name = "AccessError";
@@ -152,8 +152,9 @@ export function buildTenantContext(params: {
 
   if (!user) {
     throw new AccessError(
-      "NAO_AUTENTICADO",
-      "Usuario nao encontrado nesta conta. Verifique os parametros accountId e userId.",
+      "USUARIO_NAO_ENCONTRADO",
+      "Usuario nao encontrado nesta conta. O token esta valendo; o que nao confere " +
+        "e o userId informado na URL.",
     );
   }
 

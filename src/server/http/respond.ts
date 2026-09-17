@@ -28,6 +28,8 @@ export function ok<T>(
 
 const STATUS_BY_CODE: Record<ApiErrorBody["code"], number> = {
   NAO_AUTENTICADO: 401,
+  // 404: o pedido e legitimo, o usuario e que nao existe nesta conta.
+  USUARIO_NAO_ENCONTRADO: 404,
   SEM_PERMISSAO: 403,
   PARAMETROS_INVALIDOS: 400,
   SEM_INTEGRACAO: 503,

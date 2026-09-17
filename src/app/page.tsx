@@ -1,12 +1,34 @@
 import Link from "next/link";
+import { getIntegrationReadiness } from "@/server/config/env";
 
 /**
- * Página inicial: serve apenas como ponto de entrada para desenvolvimento.
- * Em produção, o acesso acontece pelo menu personalizado da KlipFlowi,
+ * Página inicial: ponto de entrada fora da KlipFlowi.
+ * Em produção, o acesso acontece pelo menu personalizado da plataforma,
  * que abre /inteligencia-comercial já com os parâmetros da conta.
  */
+
+export const dynamic = "force-dynamic";
+
 export default function Home() {
-  const demoParams = "accountId=acc_klipflowi_demo&userId=user_carla";
+  const integracao = getIntegrationReadiness();
+
+  /*
+   * Os ids de demonstração só existem no conjunto simulado. Com a integração
+   * real ligada, mandar alguém para `userId=user_carla` produz "usuário não
+   * encontrado nesta conta" — um erro que parece falha de integração e não é.
+   * Foi exatamente o que aconteceu ao abrir estes links contra a conta real.
+   *
+   * Com integração real, os links vão sem parâmetro: a própria Central
+   * pergunta quem está usando, a partir dos usuários que a API retorna.
+   */
+  const demoParams = integracao.ready
+    ? ""
+    : "accountId=acc_klipflowi_demo&userId=user_carla";
+
+  const comParams = (rota: string, extra = "") => {
+    const query = [demoParams, extra].filter(Boolean).join("&");
+    return query ? `${rota}?${query}` : rota;
+  };
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center gap-8 px-6 py-16">
@@ -33,7 +55,7 @@ export default function Home() {
         <ul className="mt-3 space-y-3 text-sm">
           <li>
             <Link
-              href={`/inteligencia-comercial?${demoParams}`}
+              href={comParams("/inteligencia-comercial")}
               className="font-medium text-flowi-600 hover:underline dark:text-flowi-300"
             >
               /inteligencia-comercial
@@ -45,7 +67,10 @@ export default function Home() {
           </li>
           <li>
             <Link
-              href={`/inteligencia-comercial/widget?${demoParams}&sessionId=sess_001&origin=atendimento`}
+              href={comParams(
+                "/inteligencia-comercial/widget",
+                "sessionId=sess_001&origin=atendimento",
+              )}
               className="font-medium text-flowi-600 hover:underline dark:text-flowi-300"
             >
               /inteligencia-comercial/widget
@@ -57,7 +82,7 @@ export default function Home() {
           </li>
           <li>
             <Link
-              href={`/inteligencia-comercial/configuracoes?${demoParams}`}
+              href={comParams("/inteligencia-comercial/configuracoes")}
               className="font-medium text-flowi-600 hover:underline dark:text-flowi-300"
             >
               /inteligencia-comercial/configuracoes
@@ -82,8 +107,9 @@ export default function Home() {
       </div>
 
       <p className="text-xs leading-relaxed text-text-muted">
-        Os links acima usam a conta de demonstração. Em produção, accountId e userId são
-        injetados pela KlipFlowi ao abrir o menu personalizado.
+        {integracao.ready
+          ? "A integração está ligada: os links abrem com os dados reais da conta e a Central pergunta quem está usando. Dentro da KlipFlowi, accountId e userId são injetados pelo menu personalizado."
+          : "Sem credencial configurada, os links usam a conta de demonstração. Em produção, accountId e userId são injetados pela KlipFlowi ao abrir o menu personalizado."}
       </p>
     </main>
   );

@@ -61,16 +61,39 @@ describe("buildTenantContext", () => {
   it("recusa usuario inexistente", () => {
     assert.throws(
       () => buildTenantContext({ accountId: "acc1", userId: "u_fantasma", allUsers: USERS }),
-      (e: unknown) => e instanceof AccessError && e.code === "NAO_AUTENTICADO",
+      (e: unknown) => e instanceof AccessError && e.code === "USUARIO_NAO_ENCONTRADO",
     );
   });
 
+  /**
+   * Esta e a barreira contra IDOR: trocar o userId na barra de enderecos por
+   * um id valido de OUTRA conta nao pode conceder acesso.
+   *
+   * O codigo distingue este caso de "token recusado" — dizer ao usuario para
+   * conferir a credencial quando o problema e o id da URL manda procurar
+   * defeito onde nao ha. A recusa em si continua sendo a mesma.
+   */
   it("recusa usuario de outra conta mesmo com id valido", () => {
     assert.throws(
       () => buildTenantContext({ accountId: "acc1", userId: "u_outro", allUsers: USERS }),
-      (e: unknown) => e instanceof AccessError && e.code === "NAO_AUTENTICADO",
+      (e: unknown) => e instanceof AccessError && e.code === "USUARIO_NAO_ENCONTRADO",
       "id de outra conta nao pode ser aceito",
     );
+  });
+
+  it("nao classifica id errado como credencial recusada", () => {
+    // Os dois casos pediam a mesma tela, que mandava conferir FLW_API_TOKEN.
+    try {
+      buildTenantContext({ accountId: "acc1", userId: "u_fantasma", allUsers: USERS });
+      assert.fail("deveria ter recusado");
+    } catch (erro) {
+      assert.ok(erro instanceof AccessError);
+      assert.notEqual(
+        erro.code,
+        "NAO_AUTENTICADO",
+        "um userId errado na URL nao e um token invalido",
+      );
+    }
   });
 
   it("recusa usuario inativo", () => {

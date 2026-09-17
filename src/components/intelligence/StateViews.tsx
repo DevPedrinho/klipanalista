@@ -88,9 +88,15 @@ const ERROR_CONFIG: Record<
   { title: string; hint: string; tone: Tone; retryable: boolean }
 > = {
   NAO_AUTENTICADO: {
-    title: "Erro de autenticação",
-    hint: "Verifique se o token da API (FLW_API_TOKEN) está correto e ainda é válido. Ele é gerado em Configurações > Integrações > Integração API.",
+    title: "Token da API recusado",
+    hint: "A KlipFlowi recusou a credencial. Verifique se o token (FLW_API_TOKEN) está correto e ainda é válido. Ele é gerado em Configurações > Integrações > Integração API.",
     tone: "danger",
+    retryable: false,
+  },
+  USUARIO_NAO_ENCONTRADO: {
+    title: "Usuário não encontrado nesta conta",
+    hint: "A integração está funcionando — o que não confere é o userId do endereço. Abra a Central sem parâmetros para escolher seu nome na lista de usuários da conta.",
+    tone: "warning",
     retryable: false,
   },
   SEM_PERMISSAO: {

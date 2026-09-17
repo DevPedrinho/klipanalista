@@ -32,6 +32,14 @@ export interface TenantContext {
 export interface AppUser {
   id: string;
   accountId: string;
+  /**
+   * Id da conta como a propria API o informa (`companyId`).
+   *
+   * O `accountId` acima e o rotulo que chega pela URL; este e o valor
+   * autoritativo. Serve para preencher o rotulo quando ninguem o informou,
+   * em vez de inventar um nome de conta.
+   */
+  apiAccountId?: string;
   name: string;
   email?: string;
   role: UserRole;
@@ -612,6 +620,15 @@ export interface ApiErrorBody {
   code:
     | "SEM_PERMISSAO"
     | "NAO_AUTENTICADO"
+    /**
+     * O usuario informado nao existe na conta.
+     *
+     * Separado de NAO_AUTENTICADO de proposito: os dois casos pediam a mesma
+     * tela, que mandava conferir o token da API. Quando a causa era um userId
+     * errado na URL, isso apontava para o lugar errado — o token estava
+     * perfeito, e quem lia ia procurar defeito onde nao havia.
+     */
+    | "USUARIO_NAO_ENCONTRADO"
     | "PARAMETROS_INVALIDOS"
     | "SEM_INTEGRACAO"
     | "ERRO_API"
