@@ -50,7 +50,30 @@ interface ProbeResult {
   count?: number;
   /** Nomes dos campos do primeiro registro. Nunca os valores. */
   campos?: string[];
+  /**
+   * Metadados do ENVELOPE da listagem: nomes das chaves e os valores
+   * NUMERICOS (total de registros, total de paginas). Contagem nao e dado
+   * de cliente, e e o unico jeito de saber o tamanho real da conta sem
+   * varrer tudo.
+   */
+  envelope?: { chaves: string[]; numeros: Record<string, number> };
   ms: number;
+}
+
+/** Chaves e contadores do envelope, sem nenhum conteudo de registro. */
+function lerEnvelope(
+  payload: unknown,
+): { chaves: string[]; numeros: Record<string, number> } | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+
+  const registro = payload as Record<string, unknown>;
+  const numeros: Record<string, number> = {};
+
+  for (const [chave, valor] of Object.entries(registro)) {
+    if (typeof valor === "number") numeros[chave] = valor;
+  }
+
+  return { chaves: Object.keys(registro).sort(), numeros };
 }
 
 /** Le a lista de itens de um payload, qualquer que seja o formato de envelope. */
@@ -105,6 +128,7 @@ async function sondar(
         httpStatus: resposta.status,
         count: itens?.length,
         campos: nomesDosCampos(primeiro),
+        envelope: lerEnvelope(resposta.data),
         ms: Date.now() - inicio,
       },
     };
