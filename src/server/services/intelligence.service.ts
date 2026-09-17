@@ -224,6 +224,16 @@ export async function loadOverview(params: {
   context: TenantContext;
   filters: IntelligenceFilters;
   now?: Date;
+  /**
+   * Desliga a leitura por IA nesta execucao.
+   *
+   * Existe para comparar os dois motores sobre os MESMOS dados. Sem isso, a
+   * unica forma de avaliar o que a IA acrescenta e comparar com uma medicao
+   * antiga — e entre uma e outra outras correcoes entraram, o que faz o
+   * credito ir parar no lugar errado. Uma medicao que nao isola a variavel
+   * nao mede nada.
+   */
+  semIa?: boolean;
 }): Promise<IntelligenceOverview> {
   const now = params.now ?? new Date();
   const { context, filters } = params;
@@ -550,7 +560,9 @@ export async function loadOverview(params: {
   let sinaisDescartados = 0;
   const motivosDeDescarte: Record<string, number> = {};
 
-  if (aiHabilitada()) {
+  const usarIa = aiHabilitada() && !params.semIa;
+
+  if (usarIa) {
     for (const lote of emLotes(inScope, getConcorrencia())) {
       if (Date.now() >= prazo) {
         iaNaoAnalisadas += lote.length;
@@ -751,7 +763,7 @@ export async function loadOverview(params: {
     pendingValidation: [...pending],
     sourceFailures,
     coverage,
-    ...(aiHabilitada()
+    ...(usarIa
       ? {
           aiStats: {
             conversasLidas: analises.size,

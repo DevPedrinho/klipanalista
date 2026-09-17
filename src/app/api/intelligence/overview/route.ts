@@ -50,6 +50,9 @@ export async function GET(request: NextRequest) {
 
     const overview = await loadOverview({
       context,
+      // `?semIa=1` devolve a analise puramente deterministica, para comparar
+      // os dois motores sobre os mesmos dados.
+      ...(raw["semIa"] === "1" ? { semIa: true } : {}),
       filters: {
         period,
         teamId: input.teamId,
