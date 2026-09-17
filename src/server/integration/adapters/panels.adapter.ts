@@ -125,9 +125,24 @@ export function stepsFromCards(cards: CrmCard[]): PanelStep[] {
 
       const phase = dados.phase ?? deduzida;
 
+      /*
+       * Nome da etapa: a API nao entrega, e isso ja foi medido.
+       *
+       * `/v2/panel` e `/v1/panel/{id}` devolvem `steps: null` e
+       * `stepTitles: null`; o `stepTitle` dos cards chega nulo; e os
+       * caminhos candidatos para um endpoint de etapa nao existem — a
+       * propria API responde "The value 'step' is not valid.", tratando
+       * `step` como se fosse o id do painel. A Central da KlipFlowi mostra os
+       * nomes, mas nao por esta API, ao menos com este token.
+       *
+       * Rotular todas as etapas de "Etapa sem nome" deixava a tela com a
+       * mesma palavra repetida em cada coluna, sem dar para distinguir uma da
+       * outra. O numero e a posicao na lista, nao uma promessa de ordem do
+       * funil — por isso o rotulo diz que o nome falta.
+       */
       return {
         id,
-        name: dados.name ?? "Etapa sem nome",
+        name: dados.name ?? `Etapa ${indice + 1} (sem nome na API)`,
         order: indice,
         ...(phase === undefined ? {} : { phase }),
       };
