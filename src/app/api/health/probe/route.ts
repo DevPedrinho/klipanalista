@@ -346,13 +346,34 @@ async function medirOrdemDasConversas() {
  * conclusao fica visivel em vez de escondida numa suposicao de codigo.
  */
 async function procurarEtapas(panelId: string) {
-  const candidatos: { path: string; group: "core" | "chat" | "crm"; query?: Record<string, string> }[] = [
-    { path: "/v1/panel/{id}/step", group: "crm" },
-    { path: "/v2/panel/{id}/step", group: "crm" },
-    { path: "/v1/panel/{id}/steps", group: "crm" },
+  /*
+   * Primeira rodada de candidatos, ja medida contra a conta real:
+   *
+   *   /v1/panel/{id}/step   404  — caminho nao existe
+   *   /v2/panel/{id}/step   401  — "Acesso negado" (a resposta 404 no corpo)
+   *   /v1/panel/{id}/steps  401
+   *   /v1/panel/step        500  — respondeu ERRO, nao "nao existe"
+   *   /v2/panel/step        401
+   *   /v1/panel/{id}/stage  401
+   *
+   * O 500 e a pista. Nesta API, caminho inexistente responde 401 com 404 no
+   * corpo; 500 e o que ela devolve quando o caminho EXISTE e o pedido esta
+   * malformado — foi exatamente assim que `PanelId` apareceu como
+   * obrigatorio na listagem de cards. Entao `/v1/panel/step` e provavelmente
+   * o endpoint certo com o nome de parametro errado, e a rodada abaixo varia
+   * a grafia para ler a reclamacao da API.
+   */
+  const candidatos: {
+    path: string;
+    group: "core" | "chat" | "crm";
+    query?: Record<string, string>;
+  }[] = [
     { path: "/v1/panel/step", group: "crm", query: { panelId } },
-    { path: "/v2/panel/step", group: "crm", query: { panelId } },
-    { path: "/v1/panel/{id}/stage", group: "crm" },
+    { path: "/v1/panel/step", group: "crm", query: { PanelId: panelId } },
+    { path: "/v1/panel/step", group: "crm", query: { "Filter.PanelId": panelId } },
+    { path: "/v1/panel/step", group: "crm", query: { id: panelId } },
+    { path: "/v1/panel/step", group: "crm" },
+    { path: "/v2/panel/{id}/step", group: "crm" },
   ];
 
   const tentativas = await Promise.all(
@@ -376,8 +397,11 @@ async function procurarEtapas(panelId: string) {
 
       return {
         caminho: candidato.path,
+        query: candidato.query ?? null,
         ok: sondagem.resultado.ok,
         httpStatus: sondagem.resultado.httpStatus,
+        // A reclamacao da API e o que nomeia o parametro que falta.
+        mensagem: sondagem.resultado.message ?? null,
         quantidade: sondagem.resultado.count ?? null,
         campos: sondagem.resultado.campos ?? null,
         // O que importa e se ha um nome legivel: e essa a pergunta.
