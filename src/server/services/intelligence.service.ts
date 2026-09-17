@@ -34,7 +34,7 @@ import {
   filterByVisibility,
 } from "./opportunity.service";
 import { buildQualityReport } from "./quality.service";
-import { aiHabilitada, getModelo } from "@/server/ai/client";
+import { aiHabilitada, getConcorrencia, getModelo } from "@/server/ai/client";
 import {
   analisarConversa,
   type ResultadoDaAnalise,
@@ -159,13 +159,7 @@ function orcamentoDeTempoMs(): number {
 /** Quantas conversas sao buscadas por vez, entre verificacoes do relogio. */
 const LOTE = 8;
 
-/**
- * Conversas analisadas pela IA em paralelo.
- *
- * Menor que o lote de leitura: cada chamada e bem mais cara e demorada que um
- * GET, e disparar dezenas de uma vez so troca o gargalo de lugar.
- */
-const LOTE_IA = 4;
+
 
 /**
  * Paginas de mensagens lidas por conversa na analise em massa.
@@ -557,7 +551,7 @@ export async function loadOverview(params: {
   const motivosDeDescarte: Record<string, number> = {};
 
   if (aiHabilitada()) {
-    for (const lote of emLotes(inScope, LOTE_IA)) {
+    for (const lote of emLotes(inScope, getConcorrencia())) {
       if (Date.now() >= prazo) {
         iaNaoAnalisadas += lote.length;
         continue;

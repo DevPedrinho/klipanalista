@@ -8,7 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { ConversationSnapshot, DetectedSignal } from "@/domain/types";
 import { SIGNAL_CATALOG } from "@/server/scoring/signals";
 import { maskEmail, maskPhone } from "@/server/security/masking";
-import { getAiClient, getModelo } from "./client";
+import { getAiClient, getEsforco, getModelo } from "./client";
 
 /**
  * Analista de oportunidades.
@@ -325,6 +325,9 @@ export async function analisarConversa(params: {
         model: getModelo(),
         max_tokens: 16000,
         thinking: { type: "adaptive" },
+        // Esforco baixo por padrao: ver client.ts. A medicao contra a conta
+        // real mostrou que o esforco alto custava 53 das 57 conversas.
+        output_config: { effort: getEsforco(), format: zodOutputFormat(AnaliseSchema) },
         // As instrucoes e o catalogo sao identicos em toda conversa da
         // varredura: marcar o prefixo como cacheavel evita reenviar o mesmo
         // conteudo dezenas de vezes por analise.
@@ -340,7 +343,6 @@ export async function analisarConversa(params: {
               `Analise este atendimento conforme as regras.`,
           },
         ],
-        output_config: { format: zodOutputFormat(AnaliseSchema) },
       },
       params.signal ? { signal: params.signal } : undefined,
     );
