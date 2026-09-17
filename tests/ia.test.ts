@@ -88,6 +88,84 @@ const MENSAGENS = [
 
 const PREPARADAS = paraTeste.prepararMensagens(conversa(MENSAGENS));
 
+/**
+ * Áudio transcrito: um único bloco longo, como chega da plataforma.
+ *
+ * É o formato que revelou o problema na conta real. A frase decisiva costuma
+ * estar no meio, e recortar os primeiros 280 caracteres mostrava a abertura
+ * do áudio — quase sempre a mesma saudação — em vez da evidência.
+ */
+const ABERTURA =
+  "Oi, bom dia, tudo bem com você? Então, eu estava aqui pensando sobre aquilo " +
+  "que a gente conversou, e eu andei pesquisando bastante, vi uns vídeos, vi " +
+  "umas comparações, li umas análises, e fiquei um tempo em dúvida sobre qual " +
+  "caminho seguir, porque tem muita opção e cada uma tem um detalhe diferente. ";
+const FECHAMENTO =
+  " De todo modo, depois a gente conversa com mais calma, porque agora eu " +
+  "preciso sair para uma reunião e não quero decidir com pressa.";
+
+const AUDIO_LONGO = msg({
+  id: "m4",
+  text: ABERTURA + "O orçamento já foi aprovado aqui pela diretoria." + FECHAMENTO,
+  sentAt: "2026-03-01T11:00:00Z",
+});
+
+const PREPARADAS_LONGAS = paraTeste.prepararMensagens(conversa([AUDIO_LONGO]));
+
+describe("evidência recortada de mensagem longa", () => {
+  it("mostra a janela em volta da citação, não a abertura do áudio", () => {
+    const resultado = verificarAnalise(
+      analise({
+        sinais: [
+          {
+            codigo: "ORCAMENTO_APROVADO",
+            trecho: "orcamento ja foi aprovado",
+            quemDisse: "CLIENTE",
+            forca: 0.9,
+          },
+        ],
+      }),
+      PREPARADAS_LONGAS,
+    );
+
+    const excerpt = resultado.sinais[0]?.excerpt ?? "";
+
+    assert.ok(
+      excerpt.includes("orçamento já foi aprovado"),
+      `a evidência precisa conter a citação: ${excerpt}`,
+    );
+    assert.ok(
+      !excerpt.startsWith("Oi, bom dia"),
+      "começar pela saudação é exatamente o defeito que isto corrige",
+    );
+    assert.ok(excerpt.length <= 290, `evidência longa demais: ${excerpt.length}`);
+  });
+
+  it("a evidência continua sendo texto literal da conversa", () => {
+    const resultado = verificarAnalise(
+      analise({
+        sinais: [
+          {
+            codigo: "ORCAMENTO_APROVADO",
+            trecho: "orcamento ja foi aprovado",
+            quemDisse: "CLIENTE",
+            forca: 0.9,
+          },
+        ],
+      }),
+      PREPARADAS_LONGAS,
+    );
+
+    // Sem as reticências de corte, o que sobra tem que existir na mensagem.
+    const miolo = (resultado.sinais[0]?.excerpt ?? "").replace(/^\.\.\.|\.\.\.$/g, "");
+
+    assert.ok(
+      AUDIO_LONGO.text.includes(miolo),
+      "a evidência exibida não é recorte literal da mensagem",
+    );
+  });
+});
+
 describe("verificação de trecho — a barreira contra invenção", () => {
   it("aceita o sinal quando o trecho existe mesmo na conversa", () => {
     const resultado = verificarAnalise(

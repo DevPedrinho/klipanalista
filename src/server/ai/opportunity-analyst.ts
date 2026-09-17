@@ -323,13 +323,61 @@ function montarTranscricao(mensagens: MensagemPreparada[]): string {
 
 /** Normaliza para comparar: sem acento, sem pontuacao, espacos colapsados. */
 function normalizar(texto: string): string {
-  return texto
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizarComMapa(texto).normalizado;
+}
+
+/**
+ * Normaliza guardando, para cada caractere normalizado, de onde ele veio.
+ *
+ * O mapa e o que permite devolver o TEXTO ORIGINAL do trecho citado. Sem ele
+ * so da para dizer "a citacao esta nesta mensagem", e o card acabava exibindo
+ * os primeiros 280 caracteres da mensagem inteira. Numa conversa longa isso
+ * mostra a abertura do audio em vez da frase que sustenta a conclusao — foi o
+ * que aconteceu na conta real: a dimensao "Orcamento" citava um trecho sobre
+ * placas-mae, e tres dimensoes diferentes exibiam exatamente o mesmo texto.
+ */
+function normalizarComMapa(texto: string): {
+  normalizado: string;
+  origem: number[];
+} {
+  const saida: string[] = [];
+  const origem: number[] = [];
+
+  const minusculo = texto.toLowerCase();
+
+  for (let i = 0; i < minusculo.length; i += 1) {
+    const bruto = minusculo[i] as string;
+
+    // NFD por caractere: assim um "a" com acento continua ocupando UMA
+    // posicao de origem, e o mapa nao se desalinha.
+    const semAcento = bruto.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (semAcento.length === 0) continue;
+
+    const ehPalavra = /[\w]/.test(semAcento);
+    const ehEspaco = /\s/.test(semAcento);
+    const caractere = ehPalavra ? semAcento : ehEspaco ? " " : " ";
+
+    if (caractere === " ") {
+      // Espacos colapsados: nao emite dois seguidos nem um no inicio.
+      if (saida.length === 0 || saida[saida.length - 1] === " ") continue;
+      saida.push(" ");
+      origem.push(i);
+      continue;
+    }
+
+    for (const parte of caractere) {
+      saida.push(parte);
+      origem.push(i);
+    }
+  }
+
+  // Espaco final, se houver, nao faz parte da comparacao.
+  while (saida.length > 0 && saida[saida.length - 1] === " ") {
+    saida.pop();
+    origem.pop();
+  }
+
+  return { normalizado: saida.join(""), origem };
 }
 
 /**
@@ -339,14 +387,67 @@ function normalizar(texto: string): string {
  * aspas ou reticencias ao copiar — mas NAO a conteudo. Um trecho que nao
  * aparece em nenhuma mensagem nao encontra ancora, e o sinal cai.
  */
-function ancorar(
-  trecho: string,
-  mensagens: MensagemPreparada[],
-): MensagemPreparada | undefined {
+/** Tamanho maximo da evidencia exibida no card. */
+const LIMITE_DA_EVIDENCIA = 280;
+
+interface Ancora {
+  mensagem: MensagemPreparada;
+  /**
+   * A evidencia que vai para a tela — sempre texto real da conversa.
+   *
+   * Mensagem curta aparece inteira: o contexto em volta da frase e util e
+   * cabe. Mensagem longa — um audio transcrito tem paragrafos — aparece como
+   * uma janela em volta da citacao, porque cortar nos primeiros 280
+   * caracteres mostra a abertura do audio em vez da frase que sustenta a
+   * conclusao. Na conta real isso fez a dimensao "Orcamento" citar um trecho
+   * sobre placas-mae e tres dimensoes diferentes exibirem o mesmo texto.
+   */
+  evidencia: string;
+}
+
+/**
+ * Recorta a evidencia: mensagem inteira quando cabe, janela em volta da
+ * citacao quando nao cabe.
+ */
+function recortarEvidencia(texto: string, inicio: number, fim: number): string {
+  if (texto.length <= LIMITE_DA_EVIDENCIA) return texto.trim();
+
+  const citacao = fim - inicio;
+
+  // A citacao sozinha ja estoura o limite: corta nela mesma.
+  if (citacao >= LIMITE_DA_EVIDENCIA) {
+    return texto.slice(inicio, inicio + LIMITE_DA_EVIDENCIA).trim() + "...";
+  }
+
+  const folga = Math.floor((LIMITE_DA_EVIDENCIA - citacao) / 2);
+  const de = Math.max(0, inicio - folga);
+  const ate = Math.min(texto.length, fim + folga);
+
+  const janela = texto.slice(de, ate).trim();
+
+  return (de > 0 ? "..." : "") + janela + (ate < texto.length ? "..." : "");
+}
+
+function ancorar(trecho: string, mensagens: MensagemPreparada[]): Ancora | undefined {
   const alvo = normalizar(trecho);
   if (alvo.length < 8) return undefined; // trecho curto demais nao prova nada
 
-  return mensagens.find((m) => normalizar(m.texto).includes(alvo));
+  for (const mensagem of mensagens) {
+    const { normalizado, origem } = normalizarComMapa(mensagem.texto);
+    const inicio = normalizado.indexOf(alvo);
+    if (inicio === -1) continue;
+
+    const primeiro = origem[inicio];
+    const ultimo = origem[inicio + alvo.length - 1];
+    if (primeiro === undefined || ultimo === undefined) continue;
+
+    return {
+      mensagem,
+      evidencia: recortarEvidencia(mensagem.texto, primeiro, ultimo + 1),
+    };
+  }
+
+  return undefined;
 }
 
 const CODIGOS_VALIDOS = new Map(SIGNAL_CATALOG.map((s) => [s.code, s]));
@@ -395,9 +496,9 @@ export function verificarAnalise(
       polarity: doCatalogo.polarity,
       // O trecho guardado e o da MENSAGEM, nao o que o modelo digitou:
       // assim a evidencia exibida e sempre texto real da conversa.
-      excerpt: ancora.texto.slice(0, 280),
-      messageId: ancora.id,
-      sentAt: ancora.sentAt,
+      excerpt: ancora.evidencia,
+      messageId: ancora.mensagem.id,
+      sentAt: ancora.mensagem.sentAt,
       strength: Math.min(1, Math.max(0, bruto.forca)),
     });
   }
@@ -442,7 +543,7 @@ export function verificarAnalise(
       justificativa: evidenciaRejeitada
         ? "A justificativa citava um trecho que nao existe na conversa; a nota foi zerada."
         : bruta.justificativa,
-      ...(ancora ? { evidencia: ancora.texto.slice(0, 280) } : {}),
+      ...(ancora ? { evidencia: ancora.evidencia } : {}),
       evidenciaRejeitada,
     };
   });
