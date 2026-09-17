@@ -193,7 +193,7 @@ export async function POST(request: NextRequest) {
             accountId: context.accountId,
             contactId: opportunity.contactId,
             contactName: opportunity.contactName,
-            tagKeys: opportunity.recommendedTagKeys,
+            sugeridas: opportunity.suggestedAccountTags,
           })
         : {
             status: "SIMULADA",
@@ -270,21 +270,16 @@ async function buildPreview(params: {
 
   switch (actionType) {
     case "APLICAR_ETIQUETAS": {
-      const existing = await tagsAdapter.list({ accountId: params.accountId });
-      const resolutions = resolveTags(opportunity.recommendedTagKeys, existing.data);
+      const sugeridas = opportunity.suggestedAccountTags;
 
-      const reused = resolutions.filter((r) => r.matched);
-      const needApproval = resolutions.filter((r) => r.outcome === "NEEDS_APPROVAL");
-
-      if (needApproval.length > 0) {
+      if (sugeridas.length === 0) {
         warnings.push(
-          `${needApproval.length} etiqueta(s) nao existem na conta e exigem aprovacao ` +
-            `administrativa para serem criadas: ${needApproval.map((r) => r.canonicalName).join(", ")}.`,
+          "Nenhuma etiqueta desta conta se aplica a esta conversa. Nada seria enviado.",
         );
       }
 
       /*
-       * O "antes" agora e o estado REAL do contato.
+       * O "antes" e o estado REAL do contato.
        *
        * Enquanto a acao era simulada, um texto generico bastava. Agora que
        * ela escreve de verdade, quem confirma precisa ver o que ja esta la:
@@ -292,22 +287,13 @@ async function buildPreview(params: {
        * consulta falhar, a previa continua — perder o "antes" nao pode
        * impedir a acao de ser avaliada.
        */
+      const existing = await tagsAdapter.list({ accountId: params.accountId });
       const atuais = await contactsAdapter
         .getById({ accountId: params.accountId, contactId: opportunity.contactId })
         .then((r) => r.data?.tagIds ?? null)
         .catch(() => null);
 
       const nomePorId = new Map(existing.data.map((t) => [t.id, t.name]));
-      const jaAplicadas = new Set(atuais ?? []);
-
-      const novas = reused.filter((r) => r.matched && !jaAplicadas.has(r.matched.id));
-
-      if (atuais !== null && novas.length === 0 && reused.length > 0) {
-        warnings.push(
-          "O contato ja tem todas as etiquetas recomendadas. A operacao e aditiva, " +
-            "entao nada mudaria.",
-        );
-      }
 
       return {
         before: {
@@ -317,16 +303,20 @@ async function buildPreview(params: {
               : atuais.map((id) => nomePorId.get(id) ?? id),
         },
         after: {
-          etiquetasReutilizadas: reused.map((r) => ({
-            nome: r.matched?.name,
-            regra: r.rule,
-            origem: r.outcome === "REUSE_EXACT" ? "nome exato" : "sinonimo",
+          // Cada sugestao vai com o motivo e o trecho: quem confirma julga a
+          // evidencia, nao so o rotulo.
+          etiquetasAAplicar: sugeridas.map((s) => ({
+            nome: s.tagName,
+            motivo: s.motivo,
+            origem: s.origem,
+            ...(s.trecho ? { trecho: s.trecho } : {}),
           })),
-          etiquetasPendentesDeAprovacao: needApproval.map((r) => r.canonicalName),
         },
         description:
-          `Reutilizar ${reused.length} etiqueta(s) ja existente(s) no contato ` +
-          `${opportunity.contactName}. Nenhuma etiqueta duplicada e criada.`,
+          sugeridas.length === 0
+            ? `Nenhuma etiqueta a aplicar em ${opportunity.contactName}.`
+            : `Acrescentar ${sugeridas.length} etiqueta(s) ja existente(s) na conta ao ` +
+              `contato ${opportunity.contactName}. As atuais permanecem.`,
         warnings,
       };
     }

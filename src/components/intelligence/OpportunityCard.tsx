@@ -21,19 +21,16 @@ import {
  * que sustentam a conclusao — nunca apenas o veredito.
  */
 
-const TAG_LABELS: Record<string, string> = {
-  OPORTUNIDADE_QUENTE: "IA | Oportunidade quente",
-  OPORTUNIDADE_DESENVOLVIMENTO: "IA | Em desenvolvimento",
-  FOLLOWUP_NECESSARIO: "IA | Follow-up necessário",
-  CLIENTE_SEM_RETORNO: "IA | Cliente sem retorno",
-  PROPOSTA_ENVIADA: "IA | Proposta enviada",
-  OBJECAO_PRECO: "IA | Objeção de preço",
-  URGENCIA: "IA | Urgência",
-  RECOMPRA: "IA | Recompra",
-  SEM_PERFIL: "IA | Sem perfil",
-  ATENDIMENTO_SUPORTE: "IA | Atendimento de suporte",
-  DADOS_INCOMPLETOS: "IA | Dados incompletos",
-};
+/*
+ * Os rótulos "IA | ..." saíram daqui.
+ *
+ * O card mostrava a taxonomia interna do módulo. Medido contra a conta real:
+ * nenhuma das 11 chaves tinha equivalente entre as 18 etiquetas existentes,
+ * e como o produto nunca cria etiqueta sem aprovação, o que aparecia no card
+ * era exatamente o que jamais seria aplicado. Agora o card mostra as
+ * etiquetas DA CONTA. A taxonomia interna continua existindo, mas onde ela
+ * sempre serviu: alimentando os indicadores.
+ */
 
 const BREAKDOWN_LABELS: Record<string, { label: string; max: number }> = {
   intencaoExplicita: { label: "Intenção explícita de compra", max: 30 },
@@ -202,25 +199,38 @@ export function OpportunityCard({
         {/* ---------------- ICP: aderência do cliente ---------------- */}
         {o.icp ? <BlocoIcp icp={o.icp} /> : null}
 
-        {/* Etiquetas e objeções */}
+        {/*
+          Etiquetas DA CONTA, com o porquê de cada uma.
+
+          São as etiquetas que a equipe já usa — não um vocabulário nosso —,
+          e é isso que a ação de aplicar envia. Cada uma vem com o motivo e,
+          quando a sugestão nasceu de uma menção, o trecho literal em que o
+          cliente disse aquilo: quem aprova julga a evidência, não o rótulo.
+        */}
         <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
           Etiquetas sugeridas para o contato
         </p>
-        <div className="flex flex-wrap gap-1.5">
-          {o.recommendedTagKeys.length === 0 ? (
-            <span className="text-xs text-text-muted">
-              Nenhuma etiqueta se aplica a esta conversa.
-            </span>
-          ) : null}
-          {o.recommendedTagKeys.map((key) => (
-            <Badge
-              key={key}
-              className="bg-violet-brand-50 text-violet-brand-700 ring-violet-brand-200 dark:bg-violet-brand-950/50 dark:text-violet-brand-200 dark:ring-violet-brand-800"
-            >
-              {TAG_LABELS[key] ?? key}
-            </Badge>
-          ))}
-        </div>
+        {o.suggestedAccountTags.length === 0 ? (
+          <p className="text-xs text-text-muted">
+            Nenhuma etiqueta desta conta se aplica a esta conversa.
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {o.suggestedAccountTags.map((tag) => (
+              <li key={tag.tagId} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <Badge className="bg-violet-brand-50 text-violet-brand-700 ring-violet-brand-200 dark:bg-violet-brand-950/50 dark:text-violet-brand-200 dark:ring-violet-brand-800">
+                  {tag.tagName}
+                </Badge>
+                <span className="text-xs text-text-muted">{tag.motivo}</span>
+                {tag.trecho ? (
+                  <span className="w-full text-xs italic leading-relaxed text-text-secondary">
+                    &ldquo;{tag.trecho}&rdquo;
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
 
         {/*
           Objeções em bloco próprio, não em etiqueta.

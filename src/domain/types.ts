@@ -236,6 +236,24 @@ export interface CardNote {
    Etiquetas
    ========================================================================== */
 
+/**
+ * Etiqueta da propria conta sugerida para um contato.
+ *
+ * O modulo sugere o vocabulario que a conta ja usa, nunca um proprio: numa
+ * conta real, ZERO das 11 chaves da taxonomia interna tinha equivalente entre
+ * as 18 etiquetas existentes. Como criar etiqueta exige aprovacao
+ * administrativa, sugerir vocabulario proprio significava nao sugerir nada.
+ */
+export interface SuggestedAccountTag {
+  tagId: string;
+  tagName: string;
+  /** Por que esta etiqueta foi sugerida, em uma linha, para a tela. */
+  motivo: string;
+  /** Trecho literal da conversa que sustenta a sugestao, quando houver. */
+  trecho?: string;
+  origem: "FAIXA_DE_VALOR" | "MENCAO_NA_CONVERSA" | "IA";
+}
+
 export interface Tag {
   id: string;
   accountId: string;
@@ -403,7 +421,17 @@ export interface Opportunity {
 
   nextAction: string;
   suggestedFollowUpMessage: string;
+  /**
+   * Chaves da taxonomia interna. Descrevem o ESTADO comercial da
+   * oportunidade (quente, sem retorno, recompra) e alimentam os indicadores.
+   * Nao sao aplicadas ao contato: quase nenhuma conta usa esse vocabulario.
+   */
   recommendedTagKeys: string[];
+  /**
+   * Etiquetas REAIS da conta sugeridas para este contato — e o que a acao de
+   * aplicar envia. Sempre etiquetas que ja existem: o modulo nunca cria.
+   */
+  suggestedAccountTags: SuggestedAccountTag[];
   /**
    * Aderencia do CLIENTE ao perfil ideal, avaliada pela IA.
    *

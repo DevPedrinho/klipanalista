@@ -12,6 +12,7 @@ import type {
   Panel,
   PanelStep,
   SuggestedAction,
+  Tag,
   TenantContext,
 } from "@/domain/types";
 import { maskPhone } from "@/server/security/masking";
@@ -19,6 +20,7 @@ import { computeScore, SCORE_DISPLAY_THRESHOLD } from "@/server/scoring/score";
 import { detectObjections } from "@/server/scoring/signals";
 import { ACTION_LABELS, requiresHumanConfirmation } from "./automation.service";
 import { recommendTagKeys } from "./tag-taxonomy.service";
+import { sugerirEtiquetasDaConta } from "./account-tags.service";
 
 /**
  * Monta oportunidades a partir de conversas, contatos e cards.
@@ -34,6 +36,13 @@ export interface BuildInput {
   previousConversationCount: number;
   panels: Panel[];
   settings: IntegrationSettings;
+  /**
+   * Etiquetas que a conta JA tem.
+   *
+   * E delas que saem as sugestoes aplicaveis ao contato. Vazio significa
+   * apenas "nao ha o que sugerir" — nunca inventar uma etiqueta.
+   */
+  accountTags?: Tag[];
   now?: Date;
   /**
    * Leitura da conversa feita pela IA, quando disponivel.
@@ -549,6 +558,20 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
         ?.steps.find((s) => s.id === existingCard.stepId)?.name
     : undefined;
 
+  /*
+   * Etiquetas sugeridas saem do vocabulario DA CONTA, nao do nosso.
+   *
+   * As que o contato ja tem ficam de fora: a operacao e aditiva, entao
+   * repeti-las nao mudaria nada e so poluiria o card com sugestoes sem
+   * efeito.
+   */
+  const jaNoContato = new Set(contact?.tagIds ?? []);
+  const suggestedAccountTags = sugerirEtiquetasDaConta({
+    tags: input.accountTags ?? [],
+    messages: conversation.messages,
+    ...(estimatedValue === undefined ? {} : { estimatedValue }),
+  }).filter((sugestao) => !jaNoContato.has(sugestao.tagId));
+
   return {
     id: opportunityId,
     accountId: conversation.accountId,
@@ -612,6 +635,7 @@ export function buildOpportunity(input: BuildInput): Opportunity | null {
       hoursWithoutReply,
     }),
     recommendedTagKeys: tagKeys,
+    suggestedAccountTags,
     ...(input.aiAnalysis?.icp ? { icp: input.aiAnalysis.icp } : {}),
     recommendedStepName: recommendStep({ panels, signalCodes, score: scoreResult.score }),
 

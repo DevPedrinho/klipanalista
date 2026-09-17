@@ -764,6 +764,9 @@ export async function loadOverview(params: {
       previousConversationCount: previousCount,
       panels,
       settings,
+      // As etiquetas da conta ja foram lidas para a Central; e delas que saem
+      // as sugestoes aplicaveis ao contato.
+      accountTags: tagsRes.data,
       now,
       ...(analise
         ? {

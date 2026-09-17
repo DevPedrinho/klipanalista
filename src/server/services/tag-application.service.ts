@@ -1,7 +1,7 @@
 import "server-only";
 import { contactsAdapter, tagsAdapter } from "@/server/integration/adapters";
 import { ApiError } from "@/server/integration/http/client";
-import { resolveTags } from "./tag-taxonomy.service";
+import type { SuggestedAccountTag } from "@/domain/types";
 
 export interface ResultadoDaExecucao {
   status: "EXECUTADA" | "SIMULADA" | "FALHOU";
@@ -12,13 +12,13 @@ export interface ResultadoDaExecucao {
 }
 
 /**
- * Aplica ao contato as etiquetas que a IA recomendou.
+ * Aplica ao contato as etiquetas sugeridas — todas do vocabulario da conta.
  *
  * Tres regras sustentam esta ser a primeira escrita ligada:
  *
- *  1. SO REUTILIZA. Apenas etiquetas que ja existem na conta sao enviadas.
- *     As que nao existem ficam pendentes de aprovacao administrativa — a IA
- *     nunca cria etiqueta por conta propria, nem aqui nem em lugar nenhum.
+ *  1. SO REUTILIZA. Toda sugestao nasce da listagem de etiquetas da conta e
+ *     e reconferida contra ela antes do envio. O pedido leva `tagIds`, nunca
+ *     `tagNames` — e `tagNames` que faria a plataforma criar etiqueta nova.
  *
  *  2. SO ACRESCENTA. O adapter envia `InsertIfNotExists`. Etiqueta que a
  *     equipe marcou a mao continua onde estava, e reenviar a mesma lista nao
@@ -32,7 +32,8 @@ export async function aplicarEtiquetas(params: {
   accountId: string;
   contactId: string;
   contactName: string;
-  tagKeys: string[];
+  /** Etiquetas da propria conta, ja sugeridas para esta oportunidade. */
+  sugeridas: SuggestedAccountTag[];
 }): Promise<ResultadoDaExecucao> {
   if (!params.contactId) {
     return {
@@ -44,13 +45,19 @@ export async function aplicarEtiquetas(params: {
     };
   }
 
+  /*
+   * As sugestoes vem com o id que a conta usa, mas a lista pode ter sido
+   * montada ha minutos. Conferir contra a listagem atual custa uma chamada e
+   * impede que uma etiqueta apagada nesse meio-tempo vire um erro obscuro da
+   * API.
+   */
   const existentes = await tagsAdapter.list({ accountId: params.accountId });
-  const resolucoes = resolveTags(params.tagKeys, existentes.data);
+  const idsValidos = new Map(existentes.data.map((t) => [t.id, t.name]));
 
-  const reutilizadas = resolucoes.filter((r) => r.matched);
-  const pendentes = resolucoes.filter((r) => r.outcome === "NEEDS_APPROVAL");
+  const validas = params.sugeridas.filter((s) => idsValidos.has(s.tagId));
+  const sumidas = params.sugeridas.filter((s) => !idsValidos.has(s.tagId));
 
-  if (reutilizadas.length === 0) {
+  if (validas.length === 0) {
     // Nada a enviar nao e sucesso nem erro: e uma situacao que a tela precisa
     // explicar, para ninguem achar que aplicou.
     return {
@@ -58,20 +65,20 @@ export async function aplicarEtiquetas(params: {
       apiResult: {
         ok: false,
         message:
-          "Nenhuma etiqueta equivalente existe na conta. " +
-          `Pendentes de aprovacao: ${pendentes.map((r) => r.canonicalName).join(", ") || "nenhuma"}.`,
+          params.sugeridas.length === 0
+            ? "Nenhuma etiqueta da conta foi sugerida para esta oportunidade."
+            : `As etiquetas sugeridas nao existem mais na conta: ${sumidas
+                .map((s) => s.tagName)
+                .join(", ")}.`,
       },
       notice:
-        pendentes.length > 0
-          ? `Nenhuma etiqueta foi aplicada: as ${pendentes.length} recomendadas ainda nao ` +
-            "existem nesta conta e precisam de aprovacao administrativa para serem criadas."
-          : "Nenhuma etiqueta recomendada para esta oportunidade.",
+        params.sugeridas.length === 0
+          ? "Nenhuma etiqueta desta conta se aplica a esta conversa."
+          : "As etiquetas sugeridas nao existem mais na conta. Recarregue a analise.",
     };
   }
 
-  const tagIds = reutilizadas
-    .map((r) => r.matched?.id)
-    .filter((id): id is string => typeof id === "string");
+  const tagIds = validas.map((s) => s.tagId);
 
   try {
     const resposta = await contactsAdapter.applyTags({
@@ -92,7 +99,7 @@ export async function aplicarEtiquetas(params: {
       };
     }
 
-    const nomes = reutilizadas.map((r) => r.matched?.name).filter(Boolean);
+    const nomes = validas.map((s) => s.tagName);
 
     return {
       status: "EXECUTADA",
@@ -105,15 +112,17 @@ export async function aplicarEtiquetas(params: {
       // A API devolve o contato inteiro; guardamos a lista confirmada por ela,
       // nao a que pedimos.
       depois: {
-        etiquetasAplicadas: nomes,
+        // O motivo vai junto: a auditoria precisa explicar por que cada
+        // etiqueta entrou, nao so que entrou.
+        etiquetasAplicadas: validas.map((s) => ({
+          nome: s.tagName,
+          motivo: s.motivo,
+          origem: s.origem,
+        })),
         etiquetasNoContatoDepois: resposta.data.tagIds ?? null,
-        etiquetasPendentesDeAprovacao: pendentes.map((r) => r.canonicalName),
       },
       notice:
-        `${tagIds.length} etiqueta(s) aplicada(s) em ${params.contactName}: ${nomes.join(", ")}.` +
-        (pendentes.length > 0
-          ? ` Outras ${pendentes.length} nao existem na conta e aguardam aprovacao.`
-          : ""),
+        `${tagIds.length} etiqueta(s) aplicada(s) em ${params.contactName}: ${nomes.join(", ")}.`,
     };
   } catch (erro) {
     const apiErro = erro instanceof ApiError ? erro : null;
