@@ -10,6 +10,7 @@ import {
 import { ENDPOINTS, type EndpointContract } from "@/server/integration/endpoints";
 import { ApiError, apiRequest } from "@/server/integration/http/client";
 import { ok } from "@/server/http/respond";
+import { mascararContato } from "@/server/ai/opportunity-analyst";
 
 /**
  * GET /api/health/probe
@@ -330,6 +331,102 @@ async function medirOrdemDasConversas() {
   return { direcao, ordenacao, filtros };
 }
 
+/**
+ * Abre UMA conversa pelo id e mostra o que aconteceu nela.
+ *
+ * Diferente do resto desta rota, este modo devolve CONTEUDO — e por isso
+ * existe sob demanda, com o id informado explicitamente por quem pergunta,
+ * e nunca varre a conta. Telefone, e-mail, CPF e CNPJ saem mascarados como
+ * em qualquer outro caminho do modulo.
+ *
+ * Tambem responde uma pergunta de diagnostico: esta conversa aparece nas 10
+ * paginas que a Central carrega? Se nao aparecer, e a prova de que a leitura
+ * esta pegando a parte errada da conta.
+ */
+async function abrirConversa(sessionId: string) {
+  const sessao = await sondar(ENDPOINTS.SESSIONS.GET_BY_ID, {
+    pathParams: { id: sessionId },
+  });
+
+  const mensagens = await sondar(ENDPOINTS.MESSAGES.LIST_BY_SESSION, {
+    pathParams: { id: sessionId },
+    query: { pageNumber: 1, pageSize: 100 },
+  });
+
+  const bruto = (sessao.payload ?? {}) as Record<string, unknown>;
+
+  const conversa = {
+    id: bruto["id"] ?? null,
+    numero: bruto["number"] ?? null,
+    status: bruto["status"] ?? null,
+    statusDescricao: bruto["statusDescription"] ?? null,
+    canal: bruto["channelType"] ?? null,
+    inicio: bruto["startAt"] ?? null,
+    fim: bruto["endAt"] ?? null,
+    ultimaInteracao: bruto["lastInteractionDate"] ?? null,
+    ultimaDoCliente: bruto["lastMessageIn"] ?? null,
+    ultimaEnviada: bruto["lastMessageOut"] ?? null,
+    primeiraResposta: bruto["firstResponseAt"] ?? null,
+    segundosDeEspera: bruto["timeWait"] ?? null,
+    segundosDeAtendimento: bruto["timeService"] ?? null,
+    naoLidas: bruto["unreadCount"] ?? null,
+    origem: bruto["origin"] ?? null,
+    atendenteId: bruto["userId"] ?? null,
+    contatoId: bruto["contactId"] ?? null,
+  };
+
+  const falas = (mensagens.itens ?? []).map((item) => {
+    const m = item as Record<string, unknown>;
+    const texto = typeof m["text"] === "string" ? m["text"] : "";
+    return {
+      quem: m["direction"] === "INBOUND" ? "CLIENTE" : "ATENDENTE",
+      quando: m["timestamp"] ?? m["createdAt"] ?? null,
+      tipo: m["type"] ?? null,
+      texto: texto ? mascararContato(texto) : "[sem texto — midia ou anexo]",
+    };
+  });
+
+  /*
+   * A checagem decisiva: a Central le 10 paginas de 50. Se esta conversa nao
+   * estiver la, o modulo nunca teve chance de analisa-la.
+   */
+  let apareceNaVarredura = false;
+  let paginaOndeApareceu: number | null = null;
+  let paginasLidas = 0;
+
+  for (let pagina = 1; pagina <= 10; pagina += 1) {
+    const lote = await sondar(ENDPOINTS.SESSIONS.LIST, {
+      query: { pageNumber: pagina, pageSize: 50 },
+    });
+
+    paginasLidas = pagina;
+    const encontrada = (lote.itens ?? []).some(
+      (item) => (item as Record<string, unknown>)["id"] === sessionId,
+    );
+
+    if (encontrada) {
+      apareceNaVarredura = true;
+      paginaOndeApareceu = pagina;
+      break;
+    }
+    if ((lote.itens ?? []).length === 0) break;
+  }
+
+  return {
+    conversa,
+    totalDeMensagens: falas.length,
+    falas,
+    diagnostico: {
+      apareceNasPaginasQueACentralLe: apareceNaVarredura,
+      paginaOndeApareceu,
+      paginasLidas,
+      observacao: apareceNaVarredura
+        ? "A Central consegue ver esta conversa."
+        : "A Central NAO ve esta conversa: ela esta fora das 10 primeiras paginas.",
+    },
+  };
+}
+
 export async function GET(request: NextRequest) {
   const readiness = getIntegrationReadiness();
 
@@ -354,6 +451,14 @@ export async function GET(request: NextRequest) {
    * chamada isolada por endpoint. E o que responde "por que a pagina demora",
    * pergunta que a sonda normal nao alcanca.
    */
+  const conversaPedida = request.nextUrl.searchParams.get("sessao");
+  if (conversaPedida && /^[A-Za-z0-9_-]{1,128}$/.test(conversaPedida)) {
+    return ok(
+      { executado: true, modo: "sessao", ...(await abrirConversa(conversaPedida)) },
+      { dataMode: readiness.dataMode },
+    );
+  }
+
   if (request.nextUrl.searchParams.get("ordem") === "1") {
     return ok(
       { executado: true, modo: "ordem", conversas: await medirOrdemDasConversas() },

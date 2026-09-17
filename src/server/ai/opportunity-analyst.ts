@@ -151,7 +151,7 @@ Telefones e e-mails chegam mascarados de proposito. Isso e esperado; nao comente
    -------------------------------------------------------------------------- */
 
 /** Mascara contato antes de a conversa sair do servidor. */
-function mascarar(texto: string): string {
+export function mascararContato(texto: string): string {
   return texto
     .replace(/\b(?:\+?55\s?)?\(?\d{2}\)?\s?9?\d{4}[-\s]?\d{4}\b/g, (m) => maskPhone(m) ?? "[telefone]")
     .replace(/\b[\w.+-]+@[\w-]+\.[\w.]+\b/g, (m) => maskEmail(m) ?? "[email]")
@@ -176,7 +176,7 @@ function prepararMensagens(conversation: ConversationSnapshot): MensagemPreparad
     // As mais recentes sao as que decidem o proximo passo.
     .slice(-MAX_MENSAGENS)
     .map((m) => ({
-      texto: mascarar(m.text),
+      texto: mascararContato(m.text),
       original: m.text,
       id: m.id,
       sentAt: m.sentAt,
@@ -370,4 +370,4 @@ export async function analisarConversa(params: {
 }
 
 /** Exportado para teste: o preparo e deterministico e vale conferir. */
-export const paraTeste = { prepararMensagens, mascarar, normalizar, ancorar };
+export const paraTeste = { prepararMensagens, mascarar: mascararContato, normalizar, ancorar };
