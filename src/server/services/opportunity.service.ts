@@ -8,6 +8,7 @@ import type {
   IntelligenceKpis,
   Opportunity,
   Panel,
+  PanelStep,
   SuggestedAction,
   TenantContext,
 } from "@/domain/types";
@@ -228,6 +229,148 @@ function buildFollowUpMessage(params: {
 /* --------------------------------------------------------------------------
    Etapa recomendada do funil
    -------------------------------------------------------------------------- */
+/**
+ * Estagios comerciais, do mais frio ao mais quente. Sao um conceito NOSSO:
+ * servem para traduzir a leitura da conversa em uma posicao no funil, seja
+ * qual for o nome que a empresa deu as proprias etapas.
+ */
+export const ESTAGIOS_COMERCIAIS = [
+  "TRIAGEM",
+  "QUALIFICACAO",
+  "PROPOSTA",
+  "NEGOCIACAO",
+] as const;
+
+export type EstagioComercial = (typeof ESTAGIOS_COMERCIAIS)[number];
+
+/**
+ * Vocabulario de nomes de etapa por estagio.
+ *
+ * Cada empresa batiza o proprio funil. A versao anterior procurava apenas
+ * "qualifica", "proposta" e "negocia" e devolvia `undefined` em funis reais
+ * como "Proposta Quente / Visita / Stand By / Ordem de Compra / Entregue" —
+ * ou seja, a oportunidade mais quente era justamente a que ficava sem
+ * recomendacao de etapa. O vocabulario cobre os termos mais comuns no
+ * mercado brasileiro e, quando nenhum casa, a posicao no funil decide.
+ *
+ * Sobrescritivel por conta em FLW_FUNNEL_<ESTAGIO> (lista separada por
+ * virgulas), para funis com nomenclatura propria.
+ */
+const VOCABULARIO_PADRAO: Record<EstagioComercial, string[]> = {
+  TRIAGEM: ["triagem", "novo", "novos", "lead", "entrada", "prospec", "primeiro contato"],
+  QUALIFICACAO: ["qualifica", "diagnost", "descoberta", "levantamento", "sondagem", "interesse"],
+  PROPOSTA: ["proposta", "orcamento", "orçamento", "cotacao", "cotação", "apresenta", "visita", "demonstra", "reuniao", "reunião"],
+  NEGOCIACAO: ["negocia", "fechamento", "ordem de compra", "pedido", "contrato", "assinatura"],
+};
+
+function vocabularioDe(estagio: EstagioComercial): string[] {
+  const override = process.env[`FLW_FUNNEL_${estagio}`];
+  if (!override) return VOCABULARIO_PADRAO[estagio];
+
+  const termos = override
+    .split(",")
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+
+  return termos.length > 0 ? termos : VOCABULARIO_PADRAO[estagio];
+}
+
+/** Posicao relativa de cada estagio no funil, usada quando nenhum nome casa. */
+const POSICAO_RELATIVA: Record<EstagioComercial, number> = {
+  TRIAGEM: 0,
+  QUALIFICACAO: 0.34,
+  PROPOSTA: 0.67,
+  NEGOCIACAO: 1,
+};
+
+/** Le a conversa e diz ate onde no funil ela justifica avancar. */
+export function estagioSugerido(params: {
+  signalCodes: string[];
+  score: number;
+}): EstagioComercial {
+  const has = (code: string) => params.signalCodes.includes(code);
+
+  if (has("PEDIDO_DESCONTO") || has("ORCAMENTO_APROVADO")) return "NEGOCIACAO";
+  if (has("SOLICITACAO_PRECO") || has("ENVIOU_ESPECIFICACAO") || has("PROPOSTA_ENVIADA")) {
+    return "PROPOSTA";
+  }
+  if (params.score >= 50) return "QUALIFICACAO";
+
+  return "TRIAGEM";
+}
+
+/**
+ * Mapeia os quatro estagios comerciais nas etapas REAIS do funil da conta.
+ *
+ * O mapa inteiro e calculado de uma vez, e nao um estagio por vez, porque so
+ * assim da para garantir a propriedade que importa: um estagio mais quente
+ * nunca pode recomendar uma etapa ANTERIOR a de um estagio mais frio. Quando
+ * cada estagio decidia sozinho, um funil como "Proposta Quente / Visita /
+ * Stand By / Ordem de Compra" produzia a sequencia 1 -> 2 -> 1 -> 4: o nome
+ * casava em PROPOSTA (etapa 1) enquanto QUALIFICACAO caia na posicao 2.
+ *
+ * Como funciona:
+ *  1. cada estagio procura uma ancora — a primeira etapa aberta cujo nome
+ *     bate com o vocabulario daquele estagio;
+ *  2. os estagios sem ancora recebem um palpite pela posicao no funil;
+ *  3. ancora e palpite sao limitados a janela [anterior, proxima ancora],
+ *     o que torna a sequencia nao decrescente por construcao.
+ *
+ * Etapas de desfecho (`phase === "FINAL"`, ganho/perda) ficam de fora: marcar
+ * um negocio como ganho ou perdido e decisao de pessoa, nunca de leitura de
+ * conversa.
+ */
+export function mapearFunil(steps: PanelStep[]): Record<EstagioComercial, PanelStep> | null {
+  const abertas = [...steps]
+    .filter((s) => s.phase !== "FINAL")
+    .sort((a, b) => a.order - b.order);
+
+  if (abertas.length === 0) return null;
+
+  const ultimo = abertas.length - 1;
+
+  const ancoras = ESTAGIOS_COMERCIAIS.map((estagio) => {
+    const termos = vocabularioDe(estagio);
+    const indice = abertas.findIndex((step) => {
+      const nome = step.name.toLowerCase();
+      return termos.some((termo) => nome.includes(termo));
+    });
+    return indice >= 0 ? indice : undefined;
+  });
+
+  const mapa = {} as Record<EstagioComercial, PanelStep>;
+  let piso = 0;
+
+  ESTAGIOS_COMERCIAIS.forEach((estagio, i) => {
+    // Teto: a proxima ancora a frente. Passar dela invadiria um estagio mais
+    // quente que a conversa ainda nao justifica.
+    const proximaAncora = ancoras.slice(i + 1).find((a) => a !== undefined);
+    const teto = Math.max(piso, proximaAncora ?? ultimo);
+
+    const palpite = ancoras[i] ?? Math.round(POSICAO_RELATIVA[estagio] * ultimo);
+    const escolhido = Math.min(teto, Math.max(piso, palpite));
+
+    // `abertas` nao e vazio e o indice esta limitado a [0, ultimo].
+    mapa[estagio] = abertas[escolhido] as PanelStep;
+    piso = escolhido;
+  });
+
+  return mapa;
+}
+
+/**
+ * Traduz o estagio sugerido em uma etapa REAL do funil da conta.
+ *
+ * So devolve `undefined` quando o funil nao tem nenhuma etapa aberta. Um nome
+ * fora do vocabulario nunca impede a recomendacao.
+ */
+export function recomendarEtapa(params: {
+  steps: PanelStep[];
+  estagio: EstagioComercial;
+}): PanelStep | undefined {
+  return mapearFunil(params.steps)?.[params.estagio];
+}
+
 function recommendStep(params: {
   panels: Panel[];
   signalCodes: string[];
@@ -236,19 +379,12 @@ function recommendStep(params: {
   const sales = params.panels.find((p) => p.type === "SALES");
   if (!sales) return undefined;
 
-  const has = (code: string) => params.signalCodes.includes(code);
-  const byName = (fragment: string) =>
-    sales.steps.find((s) => s.name.toLowerCase().includes(fragment))?.name;
+  const estagio = estagioSugerido({
+    signalCodes: params.signalCodes,
+    score: params.score,
+  });
 
-  if (has("PEDIDO_DESCONTO") || has("ORCAMENTO_APROVADO")) {
-    return byName("negocia") ?? byName("proposta");
-  }
-  if (has("SOLICITACAO_PRECO") || has("ENVIOU_ESPECIFICACAO")) {
-    return byName("proposta") ?? byName("qualifica");
-  }
-  if (params.score >= 50) return byName("qualifica");
-
-  return sales.steps.find((s) => s.isTriage)?.name ?? sales.steps[0]?.name;
+  return recomendarEtapa({ steps: sales.steps, estagio })?.name;
 }
 
 /* --------------------------------------------------------------------------
