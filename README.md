@@ -15,7 +15,7 @@ Esta é a **primeira entrega**. O que está e o que não está funcionando:
 
 | | Situação |
 |---|---|
-| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 176 testes automatizados** |
+| ✅ Interface, motor de score, auditoria, modos de automação | **Funcionando, com 181 testes automatizados** |
 | ✅ Autenticação da API (`Authorization: Bearer pn_...`) | **Confirmada na documentação oficial** |
 | ✅ Caminhos dos endpoints de leitura | **Extraídos do índice oficial da documentação** |
 | 🟡 Dados exibidos | **Simulados.** Nenhuma chamada real à API foi feita ou testada |
@@ -40,7 +40,7 @@ Abra <http://localhost:3000> — a página inicial lista as rotas com a conta de
 Outros comandos:
 
 ```bash
-npm test                # 176 testes automatizados (~1s)
+npm test                # 181 testes automatizados (~1s)
 npm run verify          # typecheck + lint + testes + build — rode antes de publicar
 npm run build           # build de produção
 npm run typecheck       # checagem de tipos
@@ -82,14 +82,15 @@ Copie `.env.example` para **`.env.local`** e preencha. **Nenhuma leva o prefixo
 | Variável | Para que serve | Obrigatória? |
 |---|---|---|
 | `FLW_API_TOKEN` | Token permanente. Gerado em *Configurações > Integrações > Integração API* | Para dados reais |
-| `FLW_CORE_API_URL` | URL base do grupo `core` (contatos, etiquetas, painéis, cards, usuários) | Para dados reais |
-| `FLW_CHAT_API_URL` | URL base do grupo `chat` (conversas, mensagens, notas) | Para dados reais |
+| `FLW_CORE_API_URL` | URL base do grupo `core`. **Tem padrão** — só para instância dedicada | Não |
+| `FLW_CHAT_API_URL` | URL base do grupo `chat`. **Tem padrão** | Não |
+| `FLW_CRM_API_URL` | URL base do grupo `crm`. **Tem padrão** | Não |
 | `FLW_AUTH_API_URL` | URL base do login integrado. Sem ela, recai sobre `core` | Não |
 | `AI_PROVIDER_API_KEY` | Provedor de IA. **Ainda não usado** — o motor atual é determinístico | Não |
 | `APP_BASE_URL` | URL pública deste módulo. Usada para montar o endereço do webhook | Sim |
 | `FLW_EMBED_ORIGINS` | Origens da KlipFlowi autorizadas a exibir este módulo em iframe | Para incorporar |
 | `FLW_WEBHOOK_SECRET` | Segredo HMAC dos webhooks. **Sem ele, nenhum evento é aceito** | Para webhooks |
-| `FLW_DATA_MODE` | `mock` (padrão) ou `live` | Não |
+| `FLW_DATA_MODE` | Deriva do token: com credencial vai para `live` sozinho | Não |
 
 > Não presuma um domínio único: leia o campo `servers` do OpenAPI de **cada grupo**
 > de endpoints e preencha `FLW_CORE_API_URL` e `FLW_CHAT_API_URL` separadamente.
@@ -271,7 +272,7 @@ psql -d flowi_local -f db/migrations/0002_supabase.sql
 npm test
 ```
 
-176 testes em 5 suítes, focados no que causa dano real se quebrar:
+181 testes em 5 suítes, focados no que causa dano real se quebrar:
 
 | Suíte | O que protege |
 |---|---|
@@ -336,7 +337,7 @@ src/
     └── services/              Oportunidades, automação, etiquetas,
                                auditoria, chat, qualidade, fila
 db/migrations/                 0001 esquema · 0002 ajustes do Supabase
-tests/                         176 testes automatizados
+tests/                         181 testes automatizados
 ```
 
 ### Score (0–100)

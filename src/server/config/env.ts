@@ -38,12 +38,36 @@ let cached: AppEnv | null = null;
 export function getEnv(): AppEnv {
   if (cached) return cached;
 
-  const rawMode = readString("FLW_DATA_MODE")?.toLowerCase();
-  const dataMode: DataMode = rawMode === "live" ? "live" : "mock";
+  const apiToken = readString("FLW_API_TOKEN");
 
-  const coreApiUrl = readString("FLW_CORE_API_URL");
-  const chatApiUrl = readString("FLW_CHAT_API_URL");
-  const crmApiUrl = readString("FLW_CRM_API_URL");
+  /**
+   * Modo de dados.
+   *
+   * Deriva da presenca do token: configurar a credencial JA significa querer
+   * dados reais. Exigir um segundo interruptor so produziria o caso confuso de
+   * ter o token configurado e continuar vendo dados simulados sem saber por que.
+   *
+   * `FLW_DATA_MODE` continua valendo quando informado — util para desligar a
+   * integracao temporariamente sem remover a credencial.
+   */
+  const rawMode = readString("FLW_DATA_MODE")?.toLowerCase();
+  const dataMode: DataMode =
+    rawMode === "live" ? "live" : rawMode === "mock" ? "mock" : apiToken ? "live" : "mock";
+
+  /**
+   * URLs base por grupo de servico.
+   *
+   * Nao sao segredo: sao endereco publico, confirmado na documentacao oficial
+   * (https://api.wts.chat/core/v1/contact/{id}/tags e
+   * https://api.wts.chat/crm/v3/panel/card/{id}). Ter um padrao aqui evita
+   * obrigar quem instala a digitar tres valores que nunca mudam — e deixa
+   * apenas a credencial como configuracao obrigatoria.
+   *
+   * Continuam sobrescritiveis por ambiente, para instancias dedicadas.
+   */
+  const coreApiUrl = readString("FLW_CORE_API_URL") ?? "https://api.wts.chat/core";
+  const chatApiUrl = readString("FLW_CHAT_API_URL") ?? "https://api.wts.chat/chat";
+  const crmApiUrl = readString("FLW_CRM_API_URL") ?? "https://api.wts.chat/crm";
   const authApiUrl = readString("FLW_AUTH_API_URL");
 
   /**
@@ -68,10 +92,10 @@ export function getEnv(): AppEnv {
     "http://localhost:3000";
 
   cached = {
-    apiToken: readString("FLW_API_TOKEN"),
-    coreApiUrl: coreApiUrl ? stripTrailingSlash(coreApiUrl) : undefined,
-    chatApiUrl: chatApiUrl ? stripTrailingSlash(chatApiUrl) : undefined,
-    crmApiUrl: crmApiUrl ? stripTrailingSlash(crmApiUrl) : undefined,
+    apiToken,
+    coreApiUrl: stripTrailingSlash(coreApiUrl),
+    chatApiUrl: stripTrailingSlash(chatApiUrl),
+    crmApiUrl: stripTrailingSlash(crmApiUrl),
     authApiUrl: authApiUrl ? stripTrailingSlash(authApiUrl) : undefined,
     aiProviderApiKey: readString("AI_PROVIDER_API_KEY"),
     appBaseUrl: stripTrailingSlash(appBaseUrl),
@@ -108,10 +132,9 @@ export function getIntegrationReadiness(): IntegrationReadiness {
   const env = getEnv();
   const missing: string[] = [];
 
+  // As URLs base tem padrao oficial, entao a credencial e a unica coisa que
+  // precisa ser informada por quem instala.
   if (!env.apiToken) missing.push("FLW_API_TOKEN");
-  if (!env.coreApiUrl) missing.push("FLW_CORE_API_URL");
-  if (!env.chatApiUrl) missing.push("FLW_CHAT_API_URL");
-  if (!env.crmApiUrl) missing.push("FLW_CRM_API_URL");
 
   return {
     ready: env.dataMode === "live" && missing.length === 0,

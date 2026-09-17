@@ -5,6 +5,11 @@ import { panelsAdapter, cardsAdapter } from "@/server/integration/adapters";
 import { ApiError } from "@/server/integration/http/client";
 import { resolvePeriod } from "@/server/security/tenant-context";
 import type { TenantContext } from "@/domain/types";
+import {
+  getEnv,
+  getIntegrationReadiness,
+  resetEnvCache,
+} from "@/server/config/env";
 
 /**
  * Resiliência da Central.
@@ -134,5 +139,77 @@ describe("Central resiste a falhas parciais", () => {
     } finally {
       restaurar();
     }
+  });
+});
+
+/* ==========================================================================
+   Configuração mínima
+   ==========================================================================
+   Só a credencial é segredo. As URLs base são endereço público confirmado na
+   documentação, então têm padrão — quem instala digita um campo, não quatro.
+   ========================================================================== */
+describe("configuracao de ambiente", () => {
+  const CHAVES = [
+    "FLW_API_TOKEN",
+    "FLW_DATA_MODE",
+    "FLW_CORE_API_URL",
+    "FLW_CHAT_API_URL",
+    "FLW_CRM_API_URL",
+  ];
+
+  function comAmbiente<T>(vars: Record<string, string>, fn: () => T): T {
+    const anterior = new Map(CHAVES.map((k) => [k, process.env[k]]));
+    for (const k of CHAVES) delete process.env[k];
+    Object.assign(process.env, vars);
+    resetEnvCache();
+
+    try {
+      return fn();
+    } finally {
+      for (const k of CHAVES) delete process.env[k];
+      for (const [k, v] of anterior) if (v !== undefined) process.env[k] = v;
+      resetEnvCache();
+    }
+  }
+
+  it("so o token ja basta para valer como integracao pronta", () => {
+    comAmbiente({ FLW_API_TOKEN: "pn_exemplo" }, () => {
+      const r = getIntegrationReadiness();
+      assert.equal(r.ready, true);
+      assert.deepEqual(r.missing, [], "nada mais deve ser exigido");
+      assert.equal(r.dataMode, "live");
+    });
+  });
+
+  it("sem token, opera com dados simulados e diz o que falta", () => {
+    comAmbiente({}, () => {
+      const r = getIntegrationReadiness();
+      assert.equal(r.ready, false);
+      assert.deepEqual(r.missing, ["FLW_API_TOKEN"]);
+      assert.equal(r.dataMode, "mock");
+    });
+  });
+
+  it("aplica as URLs oficiais como padrao", () => {
+    comAmbiente({ FLW_API_TOKEN: "pn_x" }, () => {
+      const env = getEnv();
+      assert.equal(env.coreApiUrl, "https://api.wts.chat/core");
+      assert.equal(env.chatApiUrl, "https://api.wts.chat/chat");
+      assert.equal(env.crmApiUrl, "https://api.wts.chat/crm");
+    });
+  });
+
+  it("deixa a instancia sobrescrever qualquer URL", () => {
+    comAmbiente({ FLW_API_TOKEN: "pn_x", FLW_CRM_API_URL: "https://interno/crm/" }, () => {
+      const env = getEnv();
+      assert.equal(env.crmApiUrl, "https://interno/crm", "barra final removida");
+      assert.equal(env.coreApiUrl, "https://api.wts.chat/core", "as outras seguem no padrao");
+    });
+  });
+
+  it("permite desligar a integracao sem remover a credencial", () => {
+    comAmbiente({ FLW_API_TOKEN: "pn_x", FLW_DATA_MODE: "mock" }, () => {
+      assert.equal(getEnv().dataMode, "mock");
+    });
   });
 });
