@@ -193,6 +193,62 @@ async function medirAdapters(accountId: string, prazoMs: number) {
   ];
 }
 
+/**
+ * Descobre em que ORDEM a listagem de conversas devolve os registros.
+ *
+ * A pergunta nao e academica. O modulo le no maximo 10 paginas e analisa as
+ * mais recentes DENTRE ELAS. Se a API entrega da mais antiga para a mais
+ * nova, essas 10 paginas sao as 500 conversas mais ANTIGAS da conta, e o
+ * periodo de 7 dias nao encontra nada — foi exatamente o que aconteceu: 500
+ * conversas lidas, zero oportunidades.
+ *
+ * Em vez de supor um parametro de ordenacao que nao esta documentado, isto
+ * observa o comportamento real: le paginas distintas e compara as datas.
+ */
+async function medirOrdemDasConversas() {
+  async function pagina(numero: number, extra: Record<string, string | number> = {}) {
+    const inicio = Date.now();
+    try {
+      const resposta = await apiRequest<unknown>(ENDPOINTS.SESSIONS.LIST, {
+        ...TENTATIVA,
+        query: { page: numero, pageSize: 20, ...extra },
+      });
+
+      const itens = extrairItens(resposta.data) ?? [];
+      const datas = itens
+        .map((item) => (item as Record<string, unknown>)["lastInteractionDate"])
+        .filter((d): d is string => typeof d === "string")
+        .sort();
+
+      return {
+        pagina: numero,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+        itens: itens.length,
+        maisAntiga: datas[0] ?? null,
+        maisRecente: datas[datas.length - 1] ?? null,
+        ms: Date.now() - inicio,
+      };
+    } catch (error) {
+      return {
+        pagina: numero,
+        extra: Object.keys(extra).length > 0 ? extra : undefined,
+        erro: (error as Error).message.slice(0, 200),
+        ms: Date.now() - inicio,
+      };
+    }
+  }
+
+  const ontem = new Date(Date.now() - 24 * 36e5).toISOString();
+
+  return {
+    // Paginas distintas sem filtro: revelam o sentido da ordenacao.
+    semFiltro: [await pagina(1), await pagina(2), await pagina(10)],
+    // O modulo envia `updatedAfter`. Se a contagem nao mudar, o parametro
+    // esta sendo ignorado e o filtro de periodo so existe do nosso lado.
+    comUpdatedAfter: await pagina(1, { updatedAfter: ontem }),
+  };
+}
+
 export async function GET(request: NextRequest) {
   const readiness = getIntegrationReadiness();
 
@@ -217,6 +273,13 @@ export async function GET(request: NextRequest) {
    * chamada isolada por endpoint. E o que responde "por que a pagina demora",
    * pergunta que a sonda normal nao alcanca.
    */
+  if (request.nextUrl.searchParams.get("ordem") === "1") {
+    return ok(
+      { executado: true, modo: "ordem", conversas: await medirOrdemDasConversas() },
+      { dataMode: readiness.dataMode },
+    );
+  }
+
   if (request.nextUrl.searchParams.get("adapters") === "1") {
     const inicio = Date.now();
     const fontes = await medirAdapters("klipflowi", 12_000);

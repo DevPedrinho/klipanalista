@@ -27,9 +27,45 @@ export class MappingReport {
     this.traces.push(trace);
   }
 
-  /** Campos de dominio que nao puderam ser preenchidos. */
+  /**
+   * Campos de dominio que nao puderam ser preenchidos, SEM repeticao.
+   *
+   * O relatorio recebe um registro por campo e por REGISTRO lido. Ao mapear
+   * 500 conversas, um campo ausente em todas aparecia 500 vezes: a resposta
+   * da Central chegou a 260 KB, quase toda feita da mesma frase repetida.
+   * Um nome de campo faltando e um fato, nao quinhentos.
+   */
   get unresolved(): string[] {
-    return this.traces.filter((t) => !t.resolved).map((t) => t.target);
+    const vistos = new Set<string>();
+    for (const trace of this.traces) {
+      if (!trace.resolved) vistos.add(trace.target);
+    }
+    return [...vistos];
+  }
+
+  /**
+   * Quantos registros ficaram sem cada campo, e em quantos ele foi lido.
+   *
+   * A contagem e o que separa "o mapeador esta errado" de "este campo e
+   * opcional e muitos registros nao o tem". Sem ela, os dois casos produzem
+   * exatamente a mesma mensagem.
+   */
+  get unresolvedStats(): { target: string; ausente: number; presente: number }[] {
+    const ausente = new Map<string, number>();
+    const presente = new Map<string, number>();
+
+    for (const trace of this.traces) {
+      const mapa = trace.resolved ? presente : ausente;
+      mapa.set(trace.target, (mapa.get(trace.target) ?? 0) + 1);
+    }
+
+    return [...ausente.entries()]
+      .map(([target, faltas]) => ({
+        target,
+        ausente: faltas,
+        presente: presente.get(target) ?? 0,
+      }))
+      .sort((a, b) => b.ausente - a.ausente);
   }
 
   get hasUnresolved(): boolean {
@@ -38,11 +74,39 @@ export class MappingReport {
 
   /** Mensagens legiveis para o campo `pendingValidation` das respostas. */
   toPendingMessages(entity: string): string[] {
-    if (!this.hasUnresolved) return [];
-    return [
-      `${entity}: campos nao encontrados no payload (${this.unresolved.join(", ")}). ` +
-        `Confirme os nomes reais na documentacao e ajuste o mapper.`,
-    ];
+    const stats = this.unresolvedStats;
+    if (stats.length === 0) return [];
+
+    /*
+     * Um campo que aparece em ALGUNS registros e opcional, nao um erro de
+     * mapeamento: uma conversa sem atendente nao tem `agentDetails`, e uma
+     * nunca respondida nao tem `firstResponseAt`. Dizer ao instalador para
+     * "confirmar o nome na documentacao" nesses casos e mandar procurar um
+     * problema que nao existe.
+     */
+    const opcionais = stats.filter((s) => s.presente > 0);
+    const ausentesSempre = stats.filter((s) => s.presente === 0);
+
+    const mensagens: string[] = [];
+
+    if (ausentesSempre.length > 0) {
+      mensagens.push(
+        `${entity}: campos nao encontrados em nenhum registro ` +
+          `(${ausentesSempre.map((s) => s.target).join(", ")}). ` +
+          `Confirme os nomes reais na documentacao e ajuste o mapper.`,
+      );
+    }
+
+    if (opcionais.length > 0) {
+      mensagens.push(
+        `${entity}: campos ausentes em parte dos registros — provavelmente ` +
+          `opcionais (${opcionais
+            .map((s) => `${s.target}: ${s.ausente} sem, ${s.presente} com`)
+            .join("; ")}).`,
+      );
+    }
+
+    return mensagens;
   }
 }
 
