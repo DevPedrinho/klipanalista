@@ -316,6 +316,17 @@ export async function GET(request: NextRequest) {
 
       return {
         titulo: painel["title"] ?? null,
+        // `steps` veio vazio ate no detalhe. O payload tem tambem
+        // `stepTitles`; e preciso ver o que cada um realmente carrega antes
+        // de decidir de onde o funil sai.
+        stepsTipo: Array.isArray(painel["steps"])
+          ? `array(${(painel["steps"] as unknown[]).length})`
+          : typeof painel["steps"],
+        stepTitlesTipo: Array.isArray(painel["stepTitles"])
+          ? `array(${(painel["stepTitles"] as unknown[]).length})`
+          : typeof painel["stepTitles"],
+        stepTitles: painel["stepTitles"] ?? null,
+        scope: painel["scope"] ?? null,
         camposDaEtapa: nomesDosCampos(steps[0]),
         etapas: steps.map((step) => {
           const s = step as Record<string, unknown>;
