@@ -154,12 +154,19 @@ function orcamentoDeTempoMs(): number {
   // tempo. Util para diagnosticar e para desligar a varredura sem mexer em
   // codigo.
   //
-  // 45 segundos, contra um `maxDuration` de 60. Os 25 anteriores foram
-  // calibrados quando so o carregamento levava 29 segundos; hoje ele leva
-  // cerca de 12, e o que sobrava nao dava para uma unica leva de leitura da
-  // IA terminar. A margem de 15 segundos cobre a serializacao da resposta e
-  // o arredondamento da plataforma.
-  return Number.isFinite(bruto) && bruto >= 0 ? Math.floor(bruto) : 45_000;
+  // 35 segundos, contra um `maxDuration` de 60.
+  //
+  // Os 25 anteriores foram calibrados quando so o carregamento levava 29
+  // segundos; hoje ele leva cerca de 12, e o que sobrava nao dava nem para
+  // uma leva de leitura da IA terminar. Mas esticar ate 45 e trocar um
+  // problema por outro pior: a pagina passa de 50 segundos e fica a um
+  // tropeco de bater no teto da plataforma, onde a resposta nao e parcial —
+  // e nenhuma.
+  //
+  // 35 mantem a pagina em torno de 40 segundos com 20 de folga para a
+  // serializacao e o arredondamento, e a fila de leitura converte esse
+  // orcamento em cobertura muito melhor do que as levas convertiam.
+  return Number.isFinite(bruto) && bruto >= 0 ? Math.floor(bruto) : 35_000;
 }
 
 /** Quantas conversas sao buscadas por vez, entre verificacoes do relogio. */
