@@ -330,10 +330,24 @@ export async function apiRequest<T>(
 /**
  * Percorre todas as paginas de um endpoint de listagem.
  *
- * PENDENTE DE VALIDACAO: o formato de paginacao (nomes dos parametros e onde
- * vem o total) precisa ser confirmado em
- * https://flwchat.readme.io/reference/paginação.md
- * Os nomes abaixo sao configuraveis justamente por isso.
+ * PAGINACAO — CONFIRMADA empiricamente contra a conta real, por
+ * /api/health/probe?ordem=1, que testou sete candidatos comparando o
+ * conteudo devolvido:
+ *
+ *   pageNumber   AVANCA   <- este e o parametro
+ *   pageIndex    nao
+ *   offset       nao
+ *   skip         nao
+ *   currentPage  nao
+ *   _page        nao
+ *   startAt      nao
+ *   page         nao      <- era o que este cliente enviava
+ *
+ * `pageSize` funciona (pedir 20 devolve 20). `updatedAfter` NAO tem efeito:
+ * a resposta e identica com e sem ele, entao o recorte de periodo acontece
+ * apenas do nosso lado.
+ *
+ * O nome continua configuravel para instancias com versao diferente da API.
  */
 export interface PaginationConfig {
   pageParam: string;
@@ -348,8 +362,9 @@ export interface PaginationConfig {
 }
 
 export const DEFAULT_PAGINATION: PaginationConfig = {
-  pageParam: "page",
-  sizeParam: "pageSize",
+  // CONFIRMADO: `page` e ignorado pela API; `pageNumber` e o que avanca.
+  pageParam: process.env["FLW_PAGE_PARAM"] ?? "pageNumber",
+  sizeParam: process.env["FLW_PAGE_SIZE_PARAM"] ?? "pageSize",
   pageSize: 50,
   firstPage: 1,
   extractItems: (payload) => {

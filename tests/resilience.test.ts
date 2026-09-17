@@ -5,6 +5,7 @@ import { panelsAdapter, cardsAdapter } from "@/server/integration/adapters";
 import {
   ApiError,
   apiRequestAllPagesWithOutcome,
+  DEFAULT_PAGINATION,
 } from "@/server/integration/http/client";
 import { resolvePeriod } from "@/server/security/tenant-context";
 import type { TenantContext } from "@/domain/types";
@@ -485,7 +486,7 @@ describe("paginacao que nao avanca", () => {
     };
 
     const restaurar = comFetch((url) => {
-      const numero = new URL(url).searchParams.get("page") ?? "1";
+      const numero = new URL(url).searchParams.get(DEFAULT_PAGINATION.pageParam) ?? "1";
       return paginas[numero] ?? { items: [] };
     });
 
@@ -513,7 +514,7 @@ describe("paginacao que nao avanca", () => {
     };
 
     const restaurar = comFetch((url) => {
-      const numero = new URL(url).searchParams.get("page") ?? "1";
+      const numero = new URL(url).searchParams.get(DEFAULT_PAGINATION.pageParam) ?? "1";
       return paginas[numero] ?? { items: [] };
     });
 
@@ -528,6 +529,74 @@ describe("paginacao que nao avanca", () => {
       assert.deepEqual(items.map((i) => i.id), ["a", "b", "c"]);
     } finally {
       restaurar();
+    }
+  });
+});
+
+/**
+ * Nome do parâmetro de página.
+ *
+ * Descoberto empiricamente por `/api/health/probe?ordem=1`, que testou sete
+ * candidatos contra a conta real comparando o conteúdo devolvido: só
+ * `pageNumber` avança. O que o cliente enviava, `page`, é ignorado — e era
+ * por isso que dez páginas viravam dez cópias da mesma.
+ *
+ * Este teste existe porque o nome certo não está em documentação nenhuma
+ * que eu tenha lido: está numa observação. Se alguém "arrumar" para `page`
+ * achando que é o óbvio, o defeito volta em silêncio.
+ */
+describe("parametro de pagina confirmado", () => {
+  const anterior = process.env["FLW_API_TOKEN"];
+
+  before(() => {
+    process.env["FLW_API_TOKEN"] = "token-de-teste";
+    resetEnvCache();
+  });
+
+  after(() => {
+    if (anterior === undefined) delete process.env["FLW_API_TOKEN"];
+    else process.env["FLW_API_TOKEN"] = anterior;
+    resetEnvCache();
+  });
+
+  it("o cliente envia `pageNumber`, nao `page`", async () => {
+    const contrato: EndpointContract = {
+      key: "TESTE_PAG",
+      method: "GET",
+      path: "/v1/teste",
+      group: "core",
+      trust: "CONFIRMED",
+      pending: [],
+      summary: "listagem de teste",
+    };
+
+    const urls: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (entrada: string | URL | Request) => {
+      urls.push(typeof entrada === "string" ? entrada : entrada.toString());
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      await apiRequestAllPagesWithOutcome(contrato, {}, {}, 1);
+
+      const enviada = new URL(urls[0] ?? "http://x/");
+      assert.equal(
+        enviada.searchParams.get("pageNumber"),
+        "1",
+        "`pageNumber` e o unico parametro que a API honra",
+      );
+      assert.equal(
+        enviada.searchParams.get("page"),
+        null,
+        "`page` e ignorado pela API: mandar so engana quem le o codigo",
+      );
+      assert.equal(enviada.searchParams.get("pageSize"), "50");
+    } finally {
+      globalThis.fetch = original;
     }
   });
 });
