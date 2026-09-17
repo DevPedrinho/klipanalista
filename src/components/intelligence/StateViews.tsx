@@ -174,28 +174,106 @@ export function NoIntegrationBanner({ missing }: { missing: string[] }) {
   );
 }
 
+/**
+ * Separa o que exige acao do que e apenas informativo.
+ *
+ * O relatorio de mapeamento produz dois tipos de aviso muito diferentes, e
+ * misturar os dois fazia o painel parecer uma parede de defeitos:
+ *
+ *   "campos nao encontrados em nenhum registro"  -> provavel erro de mapeamento
+ *   "ausentes em parte dos registros"            -> campo opcional, esta tudo certo
+ *
+ * Uma conversa sem atendente nao tem `agentDetails`; uma nunca respondida nao
+ * tem `firstResponseAt`. Isso e a forma do dado, nao um problema.
+ */
+function separarPendencias(items: string[]) {
+  const informativos = items.filter((item) => item.includes("provavelmente opcionais"));
+  const acionaveis = items.filter((item) => !item.includes("provavelmente opcionais"));
+  return { acionaveis, informativos };
+}
+
+/**
+ * Diagnostico de integracao.
+ *
+ * Fica recolhido por padrao: e informacao de quem instala o modulo, nao de
+ * quem usa a Central para vender. Aberto, mostra tudo — o briefing pede que
+ * nada fique escondido, e nada fica; o que muda e o peso visual.
+ */
 export function PendingValidationBanner({ items }: { items: string[] }) {
   if (items.length === 0) return null;
 
+  const { acionaveis, informativos } = separarPendencias(items);
+
   return (
-    <Notice tone="pending" title="Contratos de API pendentes de validação">
-      <p>
-        Os pontos abaixo ainda não foram confirmados na documentação oficial. Enquanto isso,
-        as escritas correspondentes ficam bloqueadas de propósito.
-      </p>
-      <ul className="mt-1.5 list-inside list-disc space-y-0.5">
-        {items.slice(0, 6).map((item) => (
-          <li key={item} className="text-[12px]">
-            {item}
-          </li>
-        ))}
-      </ul>
-      {items.length > 6 ? (
-        <p className="mt-1 text-[11px] opacity-80">
-          e mais {items.length - 6} item(ns). Consulte <code>/api/health</code>.
+    <details className="group rounded-xl border border-border-subtle bg-surface-card">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[13px] text-text-secondary">
+        <span
+          aria-hidden
+          className="inline-block transition-transform group-open:rotate-90"
+        >
+          ›
+        </span>
+        <span className="font-medium text-text-primary">Diagnóstico da integração</span>
+        <span className="text-text-muted">
+          {acionaveis.length > 0
+            ? `${acionaveis.length} ponto(s) a confirmar`
+            : "nenhum ponto a confirmar"}
+          {informativos.length > 0 ? ` · ${informativos.length} nota(s)` : ""}
+        </span>
+      </summary>
+
+      <div className="space-y-4 border-t border-border-subtle px-4 py-3">
+        {acionaveis.length > 0 ? (
+          <section>
+            <h3 className="text-[12px] font-semibold text-text-primary">
+              A confirmar na documentação
+            </h3>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
+              Campos que não apareceram em nenhum registro. Enquanto não forem
+              confirmados, as escritas correspondentes ficam bloqueadas de propósito.
+            </p>
+            <ul className="mt-2 space-y-1.5">
+              {acionaveis.map((item) => (
+                <li
+                  key={item}
+                  className="rounded-lg bg-surface-inset px-3 py-2 text-[12px] leading-relaxed text-text-secondary"
+                >
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {informativos.length > 0 ? (
+          <section>
+            <h3 className="text-[12px] font-semibold text-text-primary">
+              Campos opcionais
+            </h3>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
+              Presentes em parte dos registros. É a forma do dado, não um problema —
+              uma conversa sem atendente não tem responsável, uma nunca respondida não
+              tem primeira resposta.
+            </p>
+            <ul className="mt-2 space-y-1.5">
+              {informativos.map((item) => (
+                <li
+                  key={item}
+                  className="rounded-lg bg-surface-inset px-3 py-2 text-[12px] leading-relaxed text-text-muted"
+                >
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        <p className="text-[11px] text-text-muted">
+          Diagnóstico completo em <code>/api/health</code> e{" "}
+          <code>/api/health/probe</code>.
         </p>
-      ) : null}
-    </Notice>
+      </div>
+    </details>
   );
 }
 

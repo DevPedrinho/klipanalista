@@ -19,6 +19,13 @@
   --color-flowi-700: #1b35c0;
   --color-flowi-800: #1c2f9b;
   --color-flowi-900: #1c2d7a;
+  /*
+   * O passo 950 e usado em todo `dark:bg-*-950/40` do app. Sem ele, o
+   * utilitario simplesmente nao existe e a classe e descartada: o fundo
+   * CLARO do tema claro permanece no tema escuro, enquanto o texto vira
+   * `-100`, quase branco. Resultado: claro sobre claro, ilegivel.
+   */
+  --color-flowi-950: #151d52;
 
   /* Roxo de apoio */
   --color-violet-brand-50: #f5f1ff;
@@ -31,6 +38,7 @@
   --color-violet-brand-700: #6a1fcc;
   --color-violet-brand-800: #591ba7;
   --color-violet-brand-900: #4a1986;
+  --color-violet-brand-950: #2e0f57;
 
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
