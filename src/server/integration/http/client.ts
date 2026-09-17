@@ -365,14 +365,54 @@ export const DEFAULT_PAGINATION: PaginationConfig = {
   hasNext: (_payload, received, pageSize) => received === pageSize,
 };
 
-export async function apiRequestAllPages<T>(
+/** Identidade de um registro, para detectar repeticao entre paginas. */
+function identidade(item: unknown, indice: number): string {
+  if (item && typeof item === "object") {
+    const id = (item as Record<string, unknown>)["id"];
+    if (typeof id === "string" && id.length > 0) return id;
+    if (typeof id === "number") return String(id);
+  }
+  // Sem id, a propria forma serve — pior que um id, melhor que nada.
+  try {
+    return JSON.stringify(item) ?? `@${indice}`;
+  } catch {
+    return `@${indice}`;
+  }
+}
+
+export interface PaginationOutcome {
+  /** true quando a paginacao parou por repetir registros ja vistos. */
+  repetiu: boolean;
+  /** Paginas efetivamente buscadas. */
+  paginas: number;
+}
+
+/**
+ * Percorre as paginas de uma listagem, PARANDO quando elas param de avancar.
+ *
+ * Por que a parada existe: a sonda contra a conta real mostrou que as
+ * paginas 1, 2 e 10 de GET /chat/v2/session devolvem exatamente os mesmos
+ * registros — o parametro de pagina que este cliente envia esta sendo
+ * ignorado pela API. Sem esta verificacao, o modulo somava dez copias da
+ * mesma pagina e reportava 500 conversas onde havia 50. Todos os
+ * indicadores da Central ficavam inflados dez vezes, sem nenhum sinal de
+ * erro.
+ *
+ * A defesa nao depende de acertar o nome do parametro: se uma pagina nao
+ * traz nenhum registro novo, nao ha o que somar e a varredura para.
+ */
+export async function apiRequestAllPagesWithOutcome<T>(
   contract: EndpointContract,
   options: RequestOptions = {},
   pagination: Partial<PaginationConfig> = {},
   maxPages = 20,
-): Promise<T[]> {
+): Promise<{ items: T[]; outcome: PaginationOutcome }> {
   const config = { ...DEFAULT_PAGINATION, ...pagination };
   const collected: T[] = [];
+  const vistos = new Set<string>();
+
+  let paginas = 0;
+  let repetiu = false;
 
   for (let index = 0; index < maxPages; index += 1) {
     const page = config.firstPage + index;
@@ -386,11 +426,41 @@ export async function apiRequestAllPages<T>(
       },
     });
 
+    paginas += 1;
     const items = config.extractItems(response.data) as T[];
-    collected.push(...items);
+
+    let novos = 0;
+    items.forEach((item, posicao) => {
+      const chave = identidade(item, posicao);
+      if (vistos.has(chave)) return;
+      vistos.add(chave);
+      collected.push(item);
+      novos += 1;
+    });
+
+    // A pagina veio cheia mas sem nada novo: a paginacao nao esta avancando.
+    if (items.length > 0 && novos === 0) {
+      repetiu = true;
+      break;
+    }
 
     if (!config.hasNext(response.data, items.length, config.pageSize)) break;
   }
 
-  return collected;
+  return { items: collected, outcome: { repetiu, paginas } };
+}
+
+export async function apiRequestAllPages<T>(
+  contract: EndpointContract,
+  options: RequestOptions = {},
+  pagination: Partial<PaginationConfig> = {},
+  maxPages = 20,
+): Promise<T[]> {
+  const { items } = await apiRequestAllPagesWithOutcome<T>(
+    contract,
+    options,
+    pagination,
+    maxPages,
+  );
+  return items;
 }

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { loadOverview } from "@/server/services/intelligence.service";
 import { panelsAdapter, cardsAdapter } from "@/server/integration/adapters";
-import { ApiError } from "@/server/integration/http/client";
+import {
+  ApiError,
+  apiRequestAllPagesWithOutcome,
+} from "@/server/integration/http/client";
 import { resolvePeriod } from "@/server/security/tenant-context";
 import type { TenantContext } from "@/domain/types";
+import type { EndpointContract } from "@/server/integration/endpoints";
 import { MOCK_CONVERSATIONS } from "@/mocks/dataset";
 import {
   getEnv,
@@ -383,6 +387,147 @@ describe("Central respeita teto e prazo", () => {
         typeof overview.coverage.tempos[fase] === "number",
         `a fase "${fase}" precisa ser medida`,
       );
+    }
+  });
+});
+
+/**
+ * Paginação que não avança.
+ *
+ * A sonda contra a conta real mostrou que as páginas 1, 2 e 10 de
+ * GET /chat/v2/session devolvem exatamente os mesmos registros: o parâmetro
+ * de página que o cliente envia está sendo ignorado pela API.
+ *
+ * Sem defesa, o módulo somava dez cópias da mesma página e reportava 500
+ * conversas onde havia 50 — todos os indicadores da Central inflados dez
+ * vezes, sem nenhum sinal de erro. Este é o tipo de defeito que só aparece
+ * contra dados reais e que ninguém percebe olhando a tela.
+ */
+describe("paginacao que nao avanca", () => {
+  /*
+   * O cliente HTTP exige credencial antes de montar qualquer requisicao.
+   * Aqui o `fetch` e substituido, entao o valor nunca sai da memoria — mas
+   * ele precisa existir para o cliente chegar a enviar a chamada.
+   */
+  const anterior = process.env["FLW_API_TOKEN"];
+
+  before(() => {
+    process.env["FLW_API_TOKEN"] = "token-de-teste";
+    resetEnvCache();
+  });
+
+  after(() => {
+    if (anterior === undefined) delete process.env["FLW_API_TOKEN"];
+    else process.env["FLW_API_TOKEN"] = anterior;
+    resetEnvCache();
+  });
+
+  const contrato: EndpointContract = {
+    key: "TESTE_LIST",
+    method: "GET",
+    path: "/v1/teste",
+    group: "core",
+    trust: "CONFIRMED",
+    pending: [],
+    summary: "listagem de teste",
+  };
+
+  /** Substitui o fetch global e devolve como restaurá-lo. */
+  function comFetch(responder: (url: string) => unknown): () => void {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (entrada: string | URL | Request) => {
+      const url = typeof entrada === "string" ? entrada : entrada.toString();
+      return new Response(JSON.stringify(responder(url)), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }
+
+  it("para de paginar quando a pagina repete, em vez de somar copias", async () => {
+    // A API ignora o parametro de pagina: toda chamada devolve os mesmos 3.
+    const mesmosSempre = { items: [{ id: "a" }, { id: "b" }, { id: "c" }] };
+    let chamadas = 0;
+
+    const restaurar = comFetch(() => {
+      chamadas += 1;
+      return mesmosSempre;
+    });
+
+    try {
+      const { items, outcome } = await apiRequestAllPagesWithOutcome<{ id: string }>(
+        contrato,
+        {},
+        { pageSize: 3 },
+        10,
+      );
+
+      assert.deepEqual(
+        items.map((i) => i.id),
+        ["a", "b", "c"],
+        "tres registros unicos continuam sendo tres, nao trinta",
+      );
+      assert.equal(outcome.repetiu, true, "a repeticao precisa ser detectada");
+      assert.equal(chamadas, 2, "basta uma pagina repetida para parar");
+    } finally {
+      restaurar();
+    }
+  });
+
+  it("continua paginando normalmente quando as paginas avancam", async () => {
+    const paginas: Record<string, { items: { id: string }[] }> = {
+      "1": { items: [{ id: "a" }, { id: "b" }] },
+      "2": { items: [{ id: "c" }, { id: "d" }] },
+      "3": { items: [{ id: "e" }] },
+    };
+
+    const restaurar = comFetch((url) => {
+      const numero = new URL(url).searchParams.get("page") ?? "1";
+      return paginas[numero] ?? { items: [] };
+    });
+
+    try {
+      const { items, outcome } = await apiRequestAllPagesWithOutcome<{ id: string }>(
+        contrato,
+        {},
+        { pageSize: 2 },
+        10,
+      );
+
+      assert.deepEqual(items.map((i) => i.id), ["a", "b", "c", "d", "e"]);
+      assert.equal(outcome.repetiu, false);
+    } finally {
+      restaurar();
+    }
+  });
+
+  it("nao duplica um registro que aparece em duas paginas", async () => {
+    const paginas: Record<string, { items: { id: string }[] }> = {
+      "1": { items: [{ id: "a" }, { id: "b" }] },
+      // "b" repetido: acontece quando algo e inserido entre uma pagina e outra.
+      "2": { items: [{ id: "b" }, { id: "c" }] },
+      "3": { items: [] },
+    };
+
+    const restaurar = comFetch((url) => {
+      const numero = new URL(url).searchParams.get("page") ?? "1";
+      return paginas[numero] ?? { items: [] };
+    });
+
+    try {
+      const { items } = await apiRequestAllPagesWithOutcome<{ id: string }>(
+        contrato,
+        {},
+        { pageSize: 2 },
+        10,
+      );
+
+      assert.deepEqual(items.map((i) => i.id), ["a", "b", "c"]);
+    } finally {
+      restaurar();
     }
   });
 });

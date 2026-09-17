@@ -240,12 +240,49 @@ async function medirOrdemDasConversas() {
 
   const ontem = new Date(Date.now() - 24 * 36e5).toISOString();
 
+  /**
+   * Procura o nome real do parametro de pagina.
+   *
+   * CONFIRMADO: `page` e ignorado — as paginas 1, 2 e 10 devolvem os mesmos
+   * registros. Em vez de supor um substituto, cada candidato e testado
+   * contra a resposta da pagina 1: se as datas mudarem, aquele parametro
+   * avancou de verdade.
+   *
+   * Nenhum destes nomes e inventado no codigo do modulo — enquanto nao
+   * houver um confirmado aqui, o cliente HTTP para de paginar ao detectar
+   * repeticao, em vez de somar copias.
+   */
+  const referencia = await pagina(1);
+
+  const candidatos = [
+    "pageNumber",
+    "pageIndex",
+    "offset",
+    "skip",
+    "currentPage",
+    "_page",
+    "startAt",
+  ];
+
+  const testes = [];
+  for (const nome of candidatos) {
+    const resultado = await pagina(1, { [nome]: 2 });
+    const avancou =
+      !("erro" in resultado) &&
+      !("erro" in referencia) &&
+      (resultado.maisAntiga !== referencia.maisAntiga ||
+        resultado.maisRecente !== referencia.maisRecente);
+
+    testes.push({ parametro: nome, avancou, ...resultado });
+  }
+
   return {
-    // Paginas distintas sem filtro: revelam o sentido da ordenacao.
-    semFiltro: [await pagina(1), await pagina(2), await pagina(10)],
-    // O modulo envia `updatedAfter`. Se a contagem nao mudar, o parametro
+    // Paginas distintas sem filtro: revelam se `page` faz efeito.
+    semFiltro: [referencia, await pagina(2), await pagina(10)],
+    // O modulo envia `updatedAfter`. Se o resultado nao mudar, o parametro
     // esta sendo ignorado e o filtro de periodo so existe do nosso lado.
     comUpdatedAfter: await pagina(1, { updatedAfter: ontem }),
+    candidatosDePagina: testes,
   };
 }
 
