@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { CrmCard } from "@/domain/types";
 import { MappingReport } from "@/server/integration/mappers/tolerant";
 import { mapAgent } from "@/server/integration/adapters/agents.adapter";
 import { mapPanel, stepsFromCards } from "@/server/integration/adapters/panels.adapter";
