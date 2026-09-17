@@ -600,3 +600,114 @@ describe("parametro de pagina confirmado", () => {
     }
   });
 });
+
+/**
+ * Ordem entre o filtro de período e o teto de conversas.
+ *
+ * O defeito que motivou este bloco: o módulo pegava as 60 conversas mais
+ * recentes da CONTA e só então filtrava pelo período pedido. Escolher um dia
+ * específico devolvia zero oportunidades sempre que aquele dia não estivesse
+ * entre as 60 últimas — mesmo havendo conversas nele.
+ *
+ * A tela dizia "nenhuma oportunidade" quando a resposta certa era "você não
+ * olhou". É o pior tipo de erro deste módulo: silencioso, plausível, e leva
+ * o time a concluir que não há o que fazer.
+ */
+describe("periodo e aplicado antes do teto", () => {
+  function comAmbiente(nome: string, valor: string): () => void {
+    const anterior = process.env[nome];
+    process.env[nome] = valor;
+    return () => {
+      if (anterior === undefined) delete process.env[nome];
+      else process.env[nome] = anterior;
+    };
+  }
+
+  /** Período que cobre apenas a conversa MAIS ANTIGA do conjunto simulado. */
+  function periodoDaMaisAntiga() {
+    const daConta = MOCK_CONVERSATIONS.filter((c) => c.accountId === contexto.accountId);
+    const ordenadas = [...daConta].sort(
+      (a, b) => Date.parse(a.lastMessageAt) - Date.parse(b.lastMessageAt),
+    );
+    const maisAntiga = ordenadas[0];
+    assert.ok(maisAntiga, "o cenario precisa ter conversas");
+
+    const instante = Date.parse(maisAntiga.lastMessageAt);
+    return {
+      conversa: maisAntiga,
+      period: {
+        preset: "custom" as const,
+        from: new Date(instante - 36e5).toISOString(),
+        to: new Date(instante + 36e5).toISOString(),
+      },
+    };
+  }
+
+  it("encontra a conversa do periodo mesmo com teto de UMA conversa", async () => {
+    const { conversa, period } = periodoDaMaisAntiga();
+
+    // Teto de 1: se o período fosse aplicado depois, a única selecionada
+    // seria a conversa mais RECENTE da conta — que está fora do período.
+    const restaurar = comAmbiente("FLW_MAX_CONVERSAS", "1");
+
+    try {
+      const overview = await loadOverview({ context: contexto, filters: { period } });
+
+      assert.equal(
+        overview.coverage.conversasNoPeriodo,
+        1,
+        "a contagem precisa ser do periodo, nao da conta inteira",
+      );
+
+      /*
+       * A asserção que realmente morde: TODA oportunidade devolvida precisa
+       * ser de uma conversa dentro do período. Com a ordem invertida e teto
+       * de 1, a única conversa lida seria a mais recente da conta — fora do
+       * recorte — e a lista viria vazia ou com a conversa errada.
+       *
+       * Escrever isto com `||` (como estava) tornava o teste inútil: bastava
+       * "alguma conversa foi analisada" para passar, mesmo sendo a errada.
+       */
+      const de = Date.parse(period.from);
+      const ate = Date.parse(period.to);
+
+      for (const oportunidade of overview.opportunities) {
+        const quando = Date.parse(oportunidade.lastInteractionAt);
+        assert.ok(
+          quando >= de && quando <= ate,
+          `oportunidade de ${oportunidade.lastInteractionAt} esta fora do periodo pedido`,
+        );
+      }
+
+      assert.ok(
+        overview.opportunities.every((o) => o.sessionId === conversa.id),
+        "so a conversa do periodo pode gerar oportunidade aqui",
+      );
+    } finally {
+      restaurar();
+    }
+  });
+
+  it("nao conta conversas fora do periodo como se estivessem nele", async () => {
+    const { period } = periodoDaMaisAntiga();
+    const overview = await loadOverview({ context: contexto, filters: { period } });
+
+    const daConta = MOCK_CONVERSATIONS.filter((c) => c.accountId === contexto.accountId);
+    assert.ok(
+      overview.coverage.conversasNoPeriodo < daConta.length,
+      `o periodo cobre 1 conversa, mas a cobertura diz ${overview.coverage.conversasNoPeriodo} ` +
+        `de ${daConta.length} na conta`,
+    );
+  });
+
+  it("nao marca como truncado um periodo que coube inteiro", async () => {
+    const { period } = periodoDaMaisAntiga();
+    const overview = await loadOverview({ context: contexto, filters: { period } });
+
+    assert.equal(
+      overview.coverage.truncado,
+      false,
+      "uma conversa no periodo cabe no teto de 60; dizer que truncou assusta a toa",
+    );
+  });
+});

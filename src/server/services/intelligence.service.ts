@@ -356,7 +356,27 @@ export async function loadOverview(params: {
    */
   const teto = tetoDeConversas();
 
-  const porRecencia = [...sessionsRes.data].sort(
+  /*
+   * O PERIODO E APLICADO ANTES DO TETO — e a ordem importa.
+   *
+   * Antes era o contrario: pegava as 60 conversas mais recentes da conta e so
+   * depois filtrava pelo periodo. Pedir um dia especifico devolvia zero
+   * oportunidades sempre que aquele dia nao estivesse entre as 60 ultimas da
+   * conta — mesmo havendo conversas nele. A tela dizia "nenhuma oportunidade"
+   * quando a resposta certa era "voce nao olhou".
+   *
+   * Filtrando primeiro, o teto passa a limitar o que existe DENTRO do recorte
+   * pedido, que e o que qualquer pessoa espera ao escolher um periodo.
+   */
+  const periodoDe = Date.parse(filters.period.from);
+  const periodoAte = Date.parse(filters.period.to);
+
+  const noPeriodo = sessionsRes.data.filter((conversa) => {
+    const ultima = Date.parse(conversa.lastMessageAt);
+    return Number.isFinite(ultima) && ultima >= periodoDe && ultima <= periodoAte;
+  });
+
+  const porRecencia = [...noPeriodo].sort(
     (a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt),
   );
   const selecionadas = porRecencia.slice(0, teto);
@@ -413,10 +433,10 @@ export async function loadOverview(params: {
   marcar("mensagens", inicioMensagens);
 
   const coverage: AnalysisCoverage = {
-    conversasNoPeriodo: sessionsRes.data.length,
+    conversasNoPeriodo: noPeriodo.length,
     conversasAnalisadas: comMensagens,
     teto,
-    truncado: sessionsRes.data.length > selecionadas.length,
+    truncado: noPeriodo.length > selecionadas.length,
     interrompidaPorTempo,
     tempos,
   };
@@ -519,9 +539,13 @@ export async function loadOverview(params: {
 
   const contacts = [...contatosPorId.values()];
 
-  /* --- Aplica filtros de periodo, equipe e vendedor ---------------------- */
-  const periodFrom = Date.parse(filters.period.from);
-  const periodTo = Date.parse(filters.period.to);
+  /* --- Aplica filtros de equipe e vendedor -------------------------------
+   * O periodo ja foi aplicado antes do teto; a checagem segue aqui de
+   * proposito, barata, para que uma futura mudanca de ordem nao deixe passar
+   * conversa fora do recorte.
+   */
+  const periodFrom = periodoDe;
+  const periodTo = periodoAte;
 
   const teamMemberIds = filters.teamId
     ? new Set(users.filter((u) => u.teamId === filters.teamId).map((u) => u.id))
