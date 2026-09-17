@@ -393,12 +393,28 @@ async function abrirConversa(sessionId: string) {
 
   const falas = (mensagens.itens ?? []).map((item) => {
     const m = item as Record<string, unknown>;
-    const texto = typeof m["text"] === "string" ? m["text"] : "";
+    const detalhes = (m["details"] ?? {}) as Record<string, unknown>;
+    const transcricao = (detalhes["transcription"] ?? null) as Record<string, unknown> | null;
+
+    const direto = typeof m["text"] === "string" ? m["text"] : "";
+    const transcrito =
+      transcricao && transcricao["error"] !== true && transcricao["processing"] !== true
+        ? String(transcricao["text"] ?? "")
+        : "";
+
+    const texto = direto || transcrito;
+
     return {
-      quem: m["direction"] === "INBOUND" ? "CLIENTE" : "ATENDENTE",
+      // Valores CRUS, sem interpretacao: e o que permite confirmar o
+      // significado de `direction` em vez de supor.
+      directionBruta: m["direction"] ?? null,
+      userId: m["userId"] ?? null,
+      senderId: m["senderId"] ?? null,
+      origem: m["origin"] ?? null,
       quando: m["timestamp"] ?? m["createdAt"] ?? null,
       tipo: m["type"] ?? null,
-      texto: texto ? mascararContato(texto) : "[sem texto — midia ou anexo]",
+      veioDeAudio: Boolean(transcrito),
+      texto: texto ? mascararContato(texto) : "[sem texto]",
     };
   });
 

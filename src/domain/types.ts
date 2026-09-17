@@ -107,6 +107,12 @@ export interface MessageSnapshot {
   direction: "INBOUND" | "OUTBOUND";
   authorName?: string;
   text: string;
+  /**
+   * true quando o texto veio da TRANSCRICAO de um audio, nao de mensagem
+   * escrita. A analise usa os dois igualmente; a marca existe para que a
+   * evidencia exibida diga de onde a frase saiu.
+   */
+  transcrito?: boolean;
   sentAt: string;
   /** Anexos: apenas metadados, nunca o conteudo. */
   attachments?: { type: string; name?: string }[];
