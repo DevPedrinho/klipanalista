@@ -11,6 +11,7 @@ import { ENDPOINTS, type EndpointContract } from "@/server/integration/endpoints
 import { ApiError, apiRequest } from "@/server/integration/http/client";
 import { ok } from "@/server/http/respond";
 import { mascararContato } from "@/server/ai/opportunity-analyst";
+import { TAG_TAXONOMY, resolveTags } from "@/server/services/tag-taxonomy.service";
 
 /**
  * GET /api/health/probe
@@ -625,6 +626,45 @@ async function abrirConversa(sessionId: string) {
   };
 }
 
+/**
+ * A taxonomia da IA encontra correspondente nas etiquetas DESTA conta?
+ *
+ * Pergunta decisiva para a acao de aplicar etiquetas. O produto nunca cria
+ * etiqueta sozinho: ele reutiliza o que ja existe, por nome exato ou por
+ * sinonimo. Se nenhuma das 11 chaves da taxonomia casar com as etiquetas da
+ * conta, o botao vai responder "precisa de aprovacao administrativa" em todas
+ * as tentativas — correto, e indistinguivel de estar quebrado para quem olha
+ * a tela.
+ *
+ * Isto responde antes de o usuario descobrir clicando. Nomes de etiqueta sao
+ * configuracao da conta, nao dado de cliente.
+ */
+async function conferirTaxonomia(accountId: string) {
+  const existentes = await tagsAdapter.list({ accountId });
+  const chaves = TAG_TAXONOMY.map((t) => t.key);
+  const resolucoes = resolveTags(chaves, existentes.data);
+
+  const reutilizaveis = resolucoes.filter((r) => r.matched);
+  const pendentes = resolucoes.filter((r) => r.outcome === "NEEDS_APPROVAL");
+
+  return {
+    etiquetasNaConta: existentes.data.map((t) => t.name),
+    reutilizaveis: reutilizaveis.map((r) => ({
+      chave: r.key,
+      nomeCanonico: r.canonicalName,
+      casouCom: r.matched?.name,
+      criterio: r.outcome === "REUSE_EXACT" ? "nome exato" : "sinonimo",
+    })),
+    pendentesDeAprovacao: pendentes.map((r) => r.canonicalName),
+    conclusao:
+      reutilizaveis.length === 0
+        ? "Nenhuma etiqueta da taxonomia existe nesta conta. Aplicar etiquetas nao vai " +
+          "aplicar nada ate que um administrador crie ao menos uma."
+        : `${reutilizaveis.length} de ${chaves.length} chaves da taxonomia ja tem ` +
+          "etiqueta equivalente na conta e podem ser aplicadas hoje.",
+  };
+}
+
 export async function GET(request: NextRequest) {
   const readiness = getIntegrationReadiness();
 
@@ -653,6 +693,17 @@ export async function GET(request: NextRequest) {
   if (conversaPedida && /^[A-Za-z0-9_-]{1,128}$/.test(conversaPedida)) {
     return ok(
       { executado: true, modo: "sessao", ...(await abrirConversa(conversaPedida)) },
+      { dataMode: readiness.dataMode },
+    );
+  }
+
+  if (request.nextUrl.searchParams.get("etiquetas") === "1") {
+    return ok(
+      {
+        executado: true,
+        modo: "etiquetas",
+        ...(await conferirTaxonomia("klipflowi")),
+      },
       { dataMode: readiness.dataMode },
     );
   }
