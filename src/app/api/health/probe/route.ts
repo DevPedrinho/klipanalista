@@ -229,13 +229,26 @@ async function medirAdapters(accountId: string, prazoMs: number) {
  * Em vez de supor um parametro de ordenacao que nao esta documentado, isto
  * observa o comportamento real: le paginas distintas e compara as datas.
  */
+/**
+ * Descobre a ORDEM e os filtros reais da listagem de conversas.
+ *
+ * Refeita depois de um erro meu: a versao anterior paginava com `page`, que a
+ * API ignora. Todas as paginas voltavam identicas e a sonda "provou" que a
+ * ordem nao mudava — quando na verdade nao tinha saido do lugar.
+ *
+ * A pergunta que importa: as 10 paginas que o modulo le sao as conversas
+ * MAIS NOVAS ou as MAIS VELHAS da conta? Se forem as mais velhas, o modulo
+ * analisa o passado e nunca ve o movimento de hoje, que e exatamente o que
+ * ele existe para encontrar.
+ */
 async function medirOrdemDasConversas() {
   async function pagina(numero: number, extra: Record<string, string | number> = {}) {
     const inicio = Date.now();
     try {
       const resposta = await apiRequest<unknown>(ENDPOINTS.SESSIONS.LIST, {
         ...TENTATIVA,
-        query: { page: numero, pageSize: 20, ...extra },
+        // CONFIRMADO: `pageNumber` e o parametro que avanca.
+        query: { pageNumber: numero, pageSize: 20, ...extra },
       });
 
       const itens = extrairItens(resposta.data) ?? [];
@@ -246,68 +259,75 @@ async function medirOrdemDasConversas() {
 
       return {
         pagina: numero,
-        extra: Object.keys(extra).length > 0 ? extra : undefined,
+        ...(Object.keys(extra).length > 0 ? { extra } : {}),
         itens: itens.length,
         maisAntiga: datas[0] ?? null,
         maisRecente: datas[datas.length - 1] ?? null,
+        erro: undefined as string | undefined,
         ms: Date.now() - inicio,
       };
     } catch (error) {
       return {
         pagina: numero,
-        extra: Object.keys(extra).length > 0 ? extra : undefined,
+        ...(Object.keys(extra).length > 0 ? { extra } : {}),
+        itens: 0,
+        maisAntiga: null,
+        maisRecente: null,
         erro: (error as Error).message.slice(0, 200),
         ms: Date.now() - inicio,
       };
     }
   }
 
-  const ontem = new Date(Date.now() - 24 * 36e5).toISOString();
-
-  /**
-   * Procura o nome real do parametro de pagina.
-   *
-   * CONFIRMADO: `page` e ignorado — as paginas 1, 2 e 10 devolvem os mesmos
-   * registros. Em vez de supor um substituto, cada candidato e testado
-   * contra a resposta da pagina 1: se as datas mudarem, aquele parametro
-   * avancou de verdade.
-   *
-   * Nenhum destes nomes e inventado no codigo do modulo — enquanto nao
-   * houver um confirmado aqui, o cliente HTTP para de paginar ao detectar
-   * repeticao, em vez de somar copias.
-   */
-  const referencia = await pagina(1);
-
-  const candidatos = [
-    "pageNumber",
-    "pageIndex",
-    "offset",
-    "skip",
-    "currentPage",
-    "_page",
-    "startAt",
+  // Direcao: paginas espalhadas revelam se a lista vai do novo para o velho
+  // ou o contrario — e se ha conversas recentes alem da pagina 10.
+  const direcao = [
+    await pagina(1),
+    await pagina(2),
+    await pagina(10),
+    await pagina(25),
+    await pagina(60),
   ];
 
-  const testes = [];
-  for (const nome of candidatos) {
-    const resultado = await pagina(1, { [nome]: 2 });
-    const avancou =
-      !("erro" in resultado) &&
-      !("erro" in referencia) &&
-      (resultado.maisAntiga !== referencia.maisAntiga ||
-        resultado.maisRecente !== referencia.maisRecente);
+  /**
+   * Candidatos a ordenacao e a filtro de data.
+   *
+   * Nenhum entra no modulo por suposicao: so vale o que mudar o resultado de
+   * forma verificavel. `updatedAfter` ja foi testado e NAO tem efeito.
+   */
+  const referencia = direcao[0];
+  const mudou = (r: { maisRecente?: string | null; maisAntiga?: string | null }) =>
+    Boolean(referencia) &&
+    (r.maisRecente !== referencia?.maisRecente || r.maisAntiga !== referencia?.maisAntiga);
 
-    testes.push({ parametro: nome, avancou, ...resultado });
+  const ordenacao = [];
+  for (const [chave, valor] of [
+    ["orderBy", "lastInteractionDate"],
+    ["sort", "-lastInteractionDate"],
+    ["sortBy", "lastInteractionDate"],
+    ["order", "desc"],
+    ["descending", "true"],
+    ["orderByDescending", "true"],
+  ] as [string, string][]) {
+    const r = await pagina(1, { [chave]: valor });
+    ordenacao.push({ parametro: `${chave}=${valor}`, mudou: mudou(r), ...r });
   }
 
-  return {
-    // Paginas distintas sem filtro: revelam se `page` faz efeito.
-    semFiltro: [referencia, await pagina(2), await pagina(10)],
-    // O modulo envia `updatedAfter`. Se o resultado nao mudar, o parametro
-    // esta sendo ignorado e o filtro de periodo so existe do nosso lado.
-    comUpdatedAfter: await pagina(1, { updatedAfter: ontem }),
-    candidatosDePagina: testes,
-  };
+  const recente = "2026-09-01T00:00:00Z";
+  const filtros = [];
+  for (const [chave, valor] of [
+    ["startDate", recente],
+    ["from", recente],
+    ["lastInteractionDate.gte", recente],
+    ["lastInteractionDateStart", recente],
+    ["createdAtStart", recente],
+    ["initialDate", recente],
+  ] as [string, string][]) {
+    const r = await pagina(1, { [chave]: valor });
+    filtros.push({ parametro: `${chave}=${valor}`, mudou: mudou(r), ...r });
+  }
+
+  return { direcao, ordenacao, filtros };
 }
 
 export async function GET(request: NextRequest) {
