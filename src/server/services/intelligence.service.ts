@@ -121,28 +121,38 @@ export async function loadOverview(params: {
    */
   const sourceFailures: SourceFailure[] = [];
 
-  const [
-    sessionsSettled,
-    contactsSettled,
-    panelsSettled,
-    cardsSettled,
-    usersSettled,
-    tagsSettled,
-  ] = await Promise.allSettled([
-    sessionsAdapter.list({ accountId, updatedAfter: filters.period.from }),
-    contactsAdapter.list({ accountId }),
-    panelsAdapter.list({ accountId }),
-    cardsAdapter.list({ accountId }),
-    agentsAdapter.list({ accountId }),
-    tagsAdapter.list({ accountId }),
-  ]);
+  const [sessionsSettled, contactsSettled, panelsSettled, usersSettled, tagsSettled] =
+    await Promise.allSettled([
+      sessionsAdapter.list({ accountId, updatedAfter: filters.period.from }),
+      contactsAdapter.list({ accountId }),
+      panelsAdapter.list({ accountId }),
+      agentsAdapter.list({ accountId }),
+      tagsAdapter.list({ accountId }),
+    ]);
 
   const sessionsRes = unwrap(sessionsSettled, "Conversas", [], sourceFailures);
   const contactsRes = unwrap(contactsSettled, "Contatos", [], sourceFailures);
   const panelsRes = unwrap(panelsSettled, "Painéis do CRM", [], sourceFailures);
-  const cardsRes = unwrap(cardsSettled, "Cards do CRM", [], sourceFailures);
   const usersRes = unwrap(usersSettled, "Usuários", [], sourceFailures);
   const tagsRes = unwrap(tagsSettled, "Etiquetas", [], sourceFailures);
+
+  /*
+   * Os cards vem DEPOIS dos paineis, e nao em paralelo, porque a API exige o
+   * painel na listagem ("The PanelId field is required."). Nao ha como pedir
+   * "todos os cards da conta" numa chamada so.
+   *
+   * Se os paineis falharem, a lista de cards fica vazia — o que ja esta
+   * registrado em `sourceFailures` pela falha dos paineis. Repetir a mesma
+   * falha como se fossem duas so confundiria quem le o aviso.
+   */
+  const [cardsSettled] = await Promise.allSettled([
+    cardsAdapter.listForPanels({
+      accountId,
+      panelIds: panelsRes.data.map((panel) => panel.id),
+    }),
+  ]);
+
+  const cardsRes = unwrap(cardsSettled, "Cards do CRM", [], sourceFailures);
 
   /*
    * Sem usuarios nao ha como resolver perfil nem escopo de visibilidade —

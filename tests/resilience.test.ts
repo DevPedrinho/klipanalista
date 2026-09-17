@@ -91,28 +91,98 @@ describe("Central resiste a falhas parciais", () => {
     }
   });
 
-  it("reporta cada fonte que falhou, separadamente", async () => {
+  it("reporta os cards como fonte propria quando so eles falham", async () => {
+    const restaurarCards = quebrar(
+      cardsAdapter,
+      "listForPanels",
+      new ApiError({ kind: "SEM_PERMISSAO", endpointKey: "CARDS_LIST", message: "403" }),
+    );
+
+    try {
+      const overview = await loadOverview({ context: contexto, filters: filtros });
+      const falha = overview.sourceFailures.find((f) => f.source === "Cards do CRM");
+
+      assert.ok(falha, "a falha dos cards precisa aparecer com nome proprio");
+      assert.equal(falha.endpoint, "CARDS_LIST");
+      assert.equal(overview.sourceFailures.length, 1, "os paineis carregaram; so os cards falharam");
+    } finally {
+      restaurarCards();
+    }
+  });
+
+  /**
+   * Os cards dependem dos paineis: a API exige `panelId` na listagem, entao
+   * sem painel nao ha o que pedir. Reportar "Cards do CRM" tambem, nesse
+   * caso, transformaria uma causa em duas e mandaria quem le o aviso procurar
+   * um problema que nao existe.
+   */
+  it("nao duplica a falha dos paineis como se os cards tivessem falhado", async () => {
     const restaurarPaineis = quebrar(
       panelsAdapter,
       "list",
       new ApiError({ kind: "NAO_ENCONTRADO", endpointKey: "PANELS_LIST", message: "404" }),
-    );
-    const restaurarCards = quebrar(
-      cardsAdapter,
-      "list",
-      new ApiError({ kind: "SEM_PERMISSAO", endpointKey: "CARDS_LIST", message: "403" }),
     );
 
     try {
       const overview = await loadOverview({ context: contexto, filters: filtros });
       const fontes = overview.sourceFailures.map((f) => f.source);
 
-      assert.ok(fontes.includes("Painéis do CRM"));
-      assert.ok(fontes.includes("Cards do CRM"));
-      assert.equal(overview.sourceFailures.length, 2);
+      assert.deepEqual(fontes, ["Painéis do CRM"], `uma causa, um aviso: ${fontes.join(", ")}`);
+      assert.deepEqual(overview.funnels, []);
     } finally {
       restaurarPaineis();
-      restaurarCards();
+    }
+  });
+
+  /**
+   * Um painel inacessivel nao pode custar os cards de todos os outros — mas
+   * TODOS inacessiveis nao e "a conta nao tem cards", e sim "nao conseguimos
+   * ler o CRM". Confundir os dois faria a Central sugerir criar cards que ja
+   * existem.
+   */
+  it("distingue falha parcial de falha total na leitura dos cards", async () => {
+    const original = cardsAdapter.list;
+    const erro = new ApiError({
+      kind: "SEM_PERMISSAO",
+      endpointKey: "CARDS_LIST",
+      message: "403",
+    });
+
+    // Parcial: o primeiro painel falha, os demais respondem.
+    let chamada = 0;
+    (cardsAdapter.list as unknown) = async (p: { accountId: string; panelId: string }) => {
+      chamada += 1;
+      if (chamada === 1) throw erro;
+      return original.call(cardsAdapter, p);
+    };
+
+    try {
+      const parcial = await cardsAdapter.listForPanels({
+        accountId: contexto.accountId,
+        panelIds: ["painel_a", "painel_b"],
+      });
+      assert.equal(
+        parcial.pendingValidation.some((m) => m.includes("painel_a")),
+        true,
+        "o painel que falhou precisa ser nomeado",
+      );
+    } finally {
+      cardsAdapter.list = original;
+    }
+
+    // Total: nenhum painel responde.
+    const restaurar = quebrar(cardsAdapter, "list", erro);
+    try {
+      await assert.rejects(
+        () =>
+          cardsAdapter.listForPanels({
+            accountId: contexto.accountId,
+            panelIds: ["painel_a", "painel_b"],
+          }),
+        /403/,
+      );
+    } finally {
+      restaurar();
     }
   });
 

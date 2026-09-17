@@ -118,8 +118,17 @@ export function resolveVisibility(
   if (user.role === "ADMIN") return "ALL";
 
   if (user.role === "GESTOR") {
-    if (!user.teamId) return [user.id];
-    return allUsers.filter((u) => u.teamId === user.teamId).map((u) => u.id);
+    // Um atendente pode estar em varias equipes (a API devolve `departments`
+    // como lista). O gestor enxerga quem compartilha QUALQUER uma das suas.
+    const equipesDoGestor = new Set(user.teamIds ?? (user.teamId ? [user.teamId] : []));
+    if (equipesDoGestor.size === 0) return [user.id];
+
+    return allUsers
+      .filter((u) => {
+        const equipes = u.teamIds ?? (u.teamId ? [u.teamId] : []);
+        return equipes.some((equipe) => equipesDoGestor.has(equipe));
+      })
+      .map((u) => u.id);
   }
 
   return [user.id];

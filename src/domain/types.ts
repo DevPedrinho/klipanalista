@@ -35,7 +35,13 @@ export interface AppUser {
   name: string;
   email?: string;
   role: UserRole;
+  /** Equipe principal: a primeira de `teamIds`. */
   teamId?: string;
+  /**
+   * Todas as equipes do usuario. A API devolve `departments` como lista —
+   * um atendente pode estar em mais de um departamento.
+   */
+  teamIds?: string[];
   teamName?: string;
   active: boolean;
 }

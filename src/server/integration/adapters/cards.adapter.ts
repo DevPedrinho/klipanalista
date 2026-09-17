@@ -249,14 +249,27 @@ export interface UpdateCardInput {
 }
 
 export const cardsAdapter = {
+  /**
+   * Lista os cards de UM painel.
+   *
+   * `panelId` e obrigatorio — nao por escolha nossa, mas porque a API exige.
+   * Chamar sem ele devolve:
+   *
+   *   500 FORM_ERROR "The PanelId field is required."
+   *
+   * Isso foi descoberto pela sonda /api/health/probe contra a conta real.
+   * Antes, a assinatura aceitava `panelId` opcional e a Central chamava sem
+   * ele: o resultado era zero cards e um erro 500 a cada carregamento.
+   * Para varrer varios paineis, use `listForPanels`.
+   */
   async list(params: {
     accountId: string;
-    panelId?: string;
+    panelId: string;
     maxPages?: number;
   }): Promise<AdapterResult<CrmCard[]>> {
     if (shouldUseMock()) {
       const data = MOCK_CARDS.filter(
-        (c) => c.accountId === params.accountId && (!params.panelId || c.panelId === params.panelId),
+        (c) => c.accountId === params.accountId && c.panelId === params.panelId,
       );
       return mockResult(data);
     }
@@ -277,19 +290,91 @@ export const cardsAdapter = {
   },
 
   /**
+   * Varre varios paineis e junta os cards.
+   *
+   * Falha PARCIAL nao derruba o resto: a conta pode ter painel arquivado, sem
+   * permissao para o token ou com configuracao incompleta, e perder todos os
+   * cards por causa de um deles seria desproporcional. Esses paineis saem em
+   * `pendingValidation`, para que a interface diga o que ficou de fora em vez
+   * de omitir em silencio.
+   *
+   * Falha TOTAL — nenhum painel respondeu — propaga o erro. "Zero cards"
+   * quando na verdade a leitura inteira falhou seria a pior resposta
+   * possivel: a Central concluiria que nao ha nenhuma oportunidade no CRM e
+   * sugeriria criar cards que ja existem.
+   */
+  async listForPanels(params: {
+    accountId: string;
+    panelIds: string[];
+    maxPages?: number;
+  }): Promise<AdapterResult<CrmCard[]>> {
+    if (params.panelIds.length === 0) {
+      return { data: [], source: shouldUseMock() ? "mock" : "live", pendingValidation: [] };
+    }
+
+    const resultados = await Promise.allSettled(
+      params.panelIds.map((panelId) =>
+        cardsAdapter.list({
+          accountId: params.accountId,
+          panelId,
+          ...(params.maxPages === undefined ? {} : { maxPages: params.maxPages }),
+        }),
+      ),
+    );
+
+    const cards: CrmCard[] = [];
+    const pendingValidation: string[] = [];
+    let source: AdapterResult<CrmCard[]>["source"] = "live";
+    let respondeuAlgum = false;
+
+    resultados.forEach((resultado, indice) => {
+      if (resultado.status === "fulfilled") {
+        respondeuAlgum = true;
+        cards.push(...resultado.value.data);
+        pendingValidation.push(...resultado.value.pendingValidation);
+        source = resultado.value.source;
+        return;
+      }
+
+      const painel = params.panelIds[indice] ?? "(desconhecido)";
+      const motivo =
+        resultado.reason instanceof Error ? resultado.reason.message : String(resultado.reason);
+
+      pendingValidation.push(
+        `Nao foi possivel ler os cards do painel ${painel}: ${motivo}`,
+      );
+    });
+
+    // Nenhum painel respondeu: isso nao e "a conta nao tem cards", e sim
+    // "nao conseguimos ler o CRM". Propaga o primeiro erro real.
+    if (!respondeuAlgum) {
+      const primeiraFalha = resultados.find((r) => r.status === "rejected");
+      throw (primeiraFalha as PromiseRejectedResult).reason;
+    }
+
+    return { data: cards, source, pendingValidation };
+  },
+
+  /**
    * Procura um card aberto para o contato, para EVITAR DUPLICIDADE antes de
    * sugerir a criacao de um novo.
+   *
+   * Recebe os paineis onde procurar porque a API exige o painel na listagem.
    */
   async findOpenCardForContact(params: {
     accountId: string;
     contactId: string;
+    panelIds: string[];
   }): Promise<AdapterResult<CrmCard | null>> {
     if (shouldUseMock()) {
       const found = findCardByContact(params.contactId);
       return mockResult(found && found.status === "OPEN" ? found : null);
     }
 
-    const all = await cardsAdapter.list({ accountId: params.accountId });
+    const all = await cardsAdapter.listForPanels({
+      accountId: params.accountId,
+      panelIds: params.panelIds,
+    });
     const match = all.data.find(
       (c) => c.contactId === params.contactId && c.status === "OPEN",
     );

@@ -4,7 +4,13 @@ import type { AppUser, Team } from "@/domain/types";
 import { MOCK_TEAMS, MOCK_USERS, findUser } from "@/mocks/dataset";
 import { ENDPOINTS } from "../endpoints";
 import { apiRequestAllPages } from "../http/client";
-import { MappingReport, readBoolean, readIdList, readString } from "../mappers/tolerant";
+import {
+  MappingReport,
+  readArray,
+  readBoolean,
+  readIdList,
+  readString,
+} from "../mappers/tolerant";
 import { liveResult, mockResult, shouldUseMock, type AdapterResult } from "./base";
 
 /**
@@ -16,10 +22,12 @@ import { liveResult, mockResult, shouldUseMock, type AdapterResult } from "./bas
  *   GET /v2/department               Listar equipes
  *   GET /v1/department/{id}          Obter equipe
  *
- * PENDENTE DE VALIDACAO: como o PERFIL (vendedor/gestor/admin) e
- * representado. A normalizacao abaixo procura indicios no payload e cai em
- * VENDEDOR — o perfil MENOS privilegiado — quando nao ha certeza.
- * Errar para o lado restritivo e proposital.
+ * PERFIL — CONFIRMADO pela sonda contra a conta real: vem no campo
+ * `profile`, com os valores ADMIN e AGENT, e o dono da conta e marcado em
+ * `isOwner`. A conta sondada nao possui nenhum perfil intermediario, entao
+ * a deteccao de GESTOR continua por palavra-chave e ainda nao foi vista em
+ * dado real. Qualquer valor desconhecido cai em VENDEDOR — o perfil MENOS
+ * privilegiado. Errar para o lado restritivo e proposital.
  */
 
 function normalizeRole(raw?: string, isAdmin?: boolean): UserRole {
@@ -33,9 +41,47 @@ function normalizeRole(raw?: string, isAdmin?: boolean): UserRole {
   return "VENDEDOR";
 }
 
+/**
+ * Primeira equipe do usuario.
+ *
+ * CONFIRMADO pela sonda contra a conta real: o payload de /v1/agent traz
+ * `departments` — uma LISTA — e nao `departmentId`. Enquanto este mapeador
+ * procurava `departmentId`, TODO usuario ficava sem equipe, e o escopo de
+ * visibilidade de um gestor silenciosamente encolhia para "apenas os
+ * proprios atendimentos". Um gestor via menos do que devia sem nenhum aviso.
+ *
+ * Um usuario pode pertencer a varias equipes; usamos a primeira como equipe
+ * principal e guardamos o resto em `teamIds`.
+ */
+function readDepartments(
+  raw: unknown,
+  report: MappingReport,
+): { ids: string[]; firstName?: string } {
+  const lista = readArray(raw, ["departments", "teams"], "agent.departments", report);
+
+  const ids: string[] = [];
+  let firstName: string | undefined;
+
+  for (const item of lista) {
+    // A lista pode vir como objetos {id, name} ou como ids soltos.
+    if (typeof item === "string") {
+      ids.push(item);
+      continue;
+    }
+    const id = readString(item, ["id", "departmentId"], "agent.department.id");
+    if (!id) continue;
+    ids.push(id);
+    if (!firstName) firstName = readString(item, ["name", "title"], "agent.department.name");
+  }
+
+  return firstName === undefined ? { ids } : { ids, firstName };
+}
+
 export function mapAgent(raw: unknown, accountId: string, report: MappingReport): AppUser | null {
   const id = readString(raw, ["id", "agentId", "userId", "uuid"], "agent.id", report);
   if (!id) return null;
+
+  const departments = readDepartments(raw, report);
 
   return {
     id,
@@ -43,11 +89,14 @@ export function mapAgent(raw: unknown, accountId: string, report: MappingReport)
     name: readString(raw, ["name", "fullName", "displayName"], "agent.name", report) ?? "Usuario",
     email: readString(raw, ["email", "mail"], "agent.email", report),
     role: normalizeRole(
-      readString(raw, ["role", "profile", "type", "permission"], "agent.role", report),
-      readBoolean(raw, ["isAdmin", "admin"], "agent.isAdmin", report),
+      // CONFIRMADO: a API usa `profile`, com os valores ADMIN e AGENT.
+      readString(raw, ["profile", "role", "type", "permission"], "agent.profile", report),
+      // CONFIRMADO: o dono da conta vem em `isOwner`, nao em `isAdmin`.
+      readBoolean(raw, ["isOwner", "isAdmin", "admin"], "agent.isOwner", report),
     ),
-    teamId: readString(raw, ["departmentId", "teamId"], "agent.teamId", report),
-    teamName: readString(raw, ["departmentName", "teamName"], "agent.teamName", report),
+    teamId: departments.ids[0],
+    teamIds: departments.ids,
+    teamName: departments.firstName,
     active: readBoolean(raw, ["active", "enabled", "isActive"], "agent.active", report) ?? true,
   };
 }

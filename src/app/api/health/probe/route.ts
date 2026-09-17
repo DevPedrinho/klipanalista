@@ -160,8 +160,8 @@ export async function GET() {
     sondar(ENDPOINTS.CHANNELS.LIST, { query: { page: 1, pageSize: 5 } }),
     sondar(ENDPOINTS.SESSIONS.LIST, { query: { page: 1, pageSize: 5 } }),
     sondar(ENDPOINTS.CONTACTS.LIST, { query: { page: 1, pageSize: 5 } }),
-    sondar(ENDPOINTS.PANELS.LIST, { query: { page: 1, pageSize: 5 } }),
-    sondar(ENDPOINTS.CARDS.LIST, { query: { page: 1, pageSize: 5 } }),
+    sondar(ENDPOINTS.PANELS.LIST, { query: { page: 1, pageSize: 20 } }),
+    sondar(ENDPOINTS.CONTACTS.CUSTOM_FIELDS, {}),
     sondar(ENDPOINTS.WEBHOOKS.LIST_EVENTS, {}),
     sondar(ENDPOINTS.WEBHOOKS.LIST_SUBSCRIPTIONS, {}),
   ]);
@@ -169,14 +169,43 @@ export async function GET() {
   const agentes = primeiraRodada[0];
   const sessoes = primeiraRodada[4];
   const paineis = primeiraRodada[6];
-  const cards = primeiraRodada[7];
 
   // Segunda rodada: caminhos aninhados, usando ids descobertos acima.
   // So dispara o que tem id real — chamar com id inventado produziria um 404
   // que nao significa nada.
   const sessionId = idDoPrimeiro(sessoes?.itens ?? null);
-  const panelId = idDoPrimeiro(paineis?.itens ?? null);
-  const cardId = idDoPrimeiro(cards?.itens ?? null);
+  const painelBruto = (paineis?.itens ?? []) as Record<string, unknown>[];
+
+  /**
+   * Configuracao do CRM da conta.
+   *
+   * Isto e metadado de configuracao — titulo do painel, tipo e nome das
+   * etapas — e nao dado de cliente. Sao exatamente os valores necessarios
+   * para saber qual painel e de Vendas e para conferir se a recomendacao de
+   * etapa reconhece a nomenclatura da casa.
+   */
+  const crm = painelBruto.map((painel) => {
+    const steps = Array.isArray(painel["steps"]) ? (painel["steps"] as unknown[]) : [];
+    return {
+      id: typeof painel["id"] === "string" ? painel["id"] : undefined,
+      titulo: typeof painel["title"] === "string" ? painel["title"] : undefined,
+      // O literal cru: e ele que decide o que o modulo trata como funil de vendas.
+      tipoBruto: painel["type"] ?? null,
+      arquivado: painel["archived"] ?? null,
+      camposDaEtapa: nomesDosCampos(steps[0]),
+      etapas: steps.map((step) => {
+        const s = step as Record<string, unknown>;
+        return {
+          id: typeof s["id"] === "string" ? s["id"] : undefined,
+          titulo: s["title"] ?? s["name"] ?? null,
+          ordem: s["order"] ?? s["position"] ?? null,
+          faseBruta: s["phase"] ?? s["stepPhase"] ?? s["type"] ?? null,
+        };
+      }),
+    };
+  });
+
+  const panelIds = crm.map((p) => p.id).filter((id): id is string => Boolean(id));
 
   const segundaRodada = await Promise.all([
     ...(sessionId
@@ -188,19 +217,33 @@ export async function GET() {
           }),
         ]
       : []),
-    ...(panelId
-      ? [
-          sondar(ENDPOINTS.PANELS.GET_BY_ID, { pathParams: { id: panelId } }),
-          sondar(ENDPOINTS.PANELS.LOST_REASONS, {
-            pathParams: { id: panelId },
-            query: { page: 1, pageSize: 5 },
-          }),
-        ]
-      : []),
-    ...(cardId ? [sondar(ENDPOINTS.CARDS.GET_BY_ID, { pathParams: { id: cardId } })] : []),
+    // Um card por painel: a API EXIGE panelId na listagem — sem ele responde
+    // 500 "The PanelId field is required.".
+    ...panelIds.map((id) =>
+      sondar(ENDPOINTS.CARDS.LIST, { query: { panelId: id, page: 1, pageSize: 5 } }),
+    ),
+    // Motivos de perda so existem em painel de Vendas. Sondar todos revela
+    // qual literal de `type` corresponde a Vendas nesta conta.
+    ...panelIds.map((id) =>
+      sondar(ENDPOINTS.PANELS.LOST_REASONS, {
+        pathParams: { id },
+        query: { page: 1, pageSize: 5 },
+      }),
+    ),
   ]);
 
-  const resultados = [...primeiraRodada, ...segundaRodada].map((r) => r.resultado);
+  const primeiroCard = segundaRodada.find(
+    (r) => r.resultado.key === "CARDS_LIST" && r.resultado.ok,
+  );
+  const cardId = idDoPrimeiro(primeiroCard?.itens ?? null);
+
+  const terceiraRodada = cardId
+    ? await Promise.all([sondar(ENDPOINTS.CARDS.GET_BY_ID, { pathParams: { id: cardId } })])
+    : [];
+
+  const resultados = [...primeiraRodada, ...segundaRodada, ...terceiraRodada].map(
+    (r) => r.resultado,
+  );
   const falhas = resultados.filter((r) => !r.ok);
 
   /**
@@ -244,6 +287,7 @@ export async function GET() {
         ? `/inteligencia-comercial?accountId=klipflowi&userId=${primeiroUsuario.id}&preset=30d`
         : "Nenhum usuario retornado: sem userId valido a Central nao abre.",
       usuarios,
+      crm,
       resultados,
     },
     { dataMode: readiness.dataMode },
