@@ -1,6 +1,8 @@
 import "server-only";
 import type {
   AgentQualityReport,
+  AppUser,
+  ContactSnapshot,
   ConversationSnapshot,
   CrmCard,
   FunnelStepSummary,
@@ -12,6 +14,7 @@ import type {
   Opportunity,
   Panel,
   Recommendation,
+  Tag,
   TenantContext,
 } from "@/domain/types";
 import {
@@ -627,6 +630,114 @@ export async function loadOverview(params: {
 
   const contacts = [...contatosPorId.values()];
 
+
+  /*
+   * A busca acabou; daqui para a frente e so analise.
+   *
+   * A separacao existe para que uma segunda fonte de conversas — a planilha
+   * exportada da KlipFlowi — use exatamente o mesmo motor, em vez de ganhar
+   * uma copia dele que envelhece em paralelo.
+   */
+  return analisarConjunto({
+    dados: {
+      conversations,
+      contacts,
+      cards,
+      panels,
+      users,
+      tags: tagsRes.data,
+      settings,
+    },
+    context,
+    filters,
+    now,
+    semIa: params.semIa,
+    coleta: { coverage, sourceFailures, pending: [...pending], prazo },
+  });
+}
+
+/* ==========================================================================
+   Motor de analise
+   ========================================================================== */
+
+/** Tudo que o motor precisa para analisar, ja carregado. */
+export interface DadosParaAnalise {
+  /** Conversas com as mensagens JA embutidas. */
+  conversations: ConversationSnapshot[];
+  contacts: ContactSnapshot[];
+  cards: CrmCard[];
+  panels: Panel[];
+  users: AppUser[];
+  /** Etiquetas da conta: e delas que saem as sugestoes aplicaveis. */
+  tags: Tag[];
+  settings: IntegrationSettings;
+}
+
+/**
+ * O que a fase de busca descobriu sobre a propria busca.
+ *
+ * Quem carregou os dados sabe coisas que o motor nao tem como deduzir: que o
+ * periodo tinha 547 conversas e so 60 couberam, que os paineis falharam, que
+ * o relogio estourou no meio. Sem isso a analise diria "60 conversas" como se
+ * fossem todas, que e a diferenca entre meia resposta honesta e uma resposta
+ * errada.
+ */
+export interface EstadoDaColeta {
+  coverage: AnalysisCoverage;
+  sourceFailures: SourceFailure[];
+  pending: string[];
+  /** Instante limite para as fases que fazem N chamadas (a leitura por IA). */
+  prazo: number;
+}
+
+/**
+ * Analisa um conjunto de conversas ja carregadas. NAO chama a API.
+ *
+ * Esta funcao era o segundo terco de `loadOverview`, misturada com a busca.
+ * Separa-las nao foi arrumacao: e o que permite alimentar o mesmo motor por
+ * uma planilha exportada da KlipFlowi sem duplicar score, deteccao de sinais,
+ * verificacao de evidencia, funil, qualidade e indicadores — seis coisas que
+ * nao podem divergir entre as duas entradas.
+ *
+ * Sem `coleta`, assume que as conversas recebidas sao tudo que havia: e o caso
+ * da planilha, onde o recorte foi decidido por quem exportou.
+ */
+export async function analisarConjunto(params: {
+  dados: DadosParaAnalise;
+  context: TenantContext;
+  filters: IntelligenceFilters;
+  now?: Date;
+  semIa?: boolean;
+  coleta?: Partial<EstadoDaColeta>;
+}): Promise<IntelligenceOverview> {
+  const { context, filters, semIa } = params;
+  const { conversations, contacts, cards, panels, users, tags, settings } = params.dados;
+
+  const now = params.now ?? new Date();
+  const accountId = context.accountId;
+
+  const sourceFailures: SourceFailure[] = params.coleta?.sourceFailures ?? [];
+  const pending = new Set<string>(params.coleta?.pending ?? []);
+  const prazo = params.coleta?.prazo ?? Date.now() + orcamentoDeTempoMs();
+
+  const coverage: AnalysisCoverage = params.coleta?.coverage ?? {
+    conversasNoPeriodo: conversations.length,
+    conversasAnalisadas: conversations.length,
+    teto: conversations.length,
+    truncado: false,
+    interrompidaPorTempo: false,
+    tempos: {},
+  };
+
+  // Mesma referencia que a fase de busca ja vinha preenchendo: os tempos das
+  // fases anteriores continuam aparecendo ao lado do tempo da IA.
+  const tempos = coverage.tempos;
+  const marcar = (fase: string, desde: number) => {
+    tempos[fase] = Date.now() - desde;
+  };
+
+  const periodoDe = Date.parse(filters.period.from);
+  const periodoAte = Date.parse(filters.period.to);
   /* --- Aplica filtros de equipe e vendedor -------------------------------
    * O periodo ja foi aplicado antes do teto; a checagem segue aqui de
    * proposito, barata, para que uma futura mudanca de ordem nao deixe passar
@@ -672,7 +783,7 @@ export async function loadOverview(params: {
   let sinaisDescartados = 0;
   const motivosDeDescarte: Record<string, number> = {};
 
-  const usarIa = aiHabilitada() && !params.semIa;
+  const usarIa = aiHabilitada() && !semIa;
 
   if (usarIa) {
     const { resultados, naoIniciados } = await emParalelo(
@@ -766,7 +877,7 @@ export async function loadOverview(params: {
       settings,
       // As etiquetas da conta ja foram lidas para a Central; e delas que saem
       // as sugestoes aplicaveis ao contato.
-      accountTags: tagsRes.data,
+      accountTags: tags,
       now,
       ...(analise
         ? {
