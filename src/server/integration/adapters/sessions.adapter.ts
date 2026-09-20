@@ -31,7 +31,7 @@ import { messagesAdapter } from "./messages.adapter";
  * instancias com versao diferente, mas o nome oficial vem sempre primeiro.
  */
 
-function normalizeChannel(raw?: string): Channel {
+export function normalizeChannel(raw?: string): Channel {
   if (!raw) return "OUTRO";
   const upper = raw.toUpperCase();
   const known: Channel[] = [

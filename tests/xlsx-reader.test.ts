@@ -58,8 +58,8 @@ describe("leitor de planilha", () => {
 
     assert.deepEqual(lida.cabecalhos, ["Atendimento", "Mensagem", "Direção"]);
     assert.equal(lida.linhas.length, 2);
-    assert.equal(lida.linhas[0]?.["Mensagem"], "bom dia");
-    assert.equal(lida.linhas[1]?.["Direção"], "Enviada");
+    assert.equal(lida.linhas[0]?.valores["Mensagem"], "bom dia");
+    assert.equal(lida.linhas[1]?.valores["Direção"], "Enviada");
     assert.equal(lida.abaLida, "Atendimentos");
   });
 
@@ -77,7 +77,7 @@ describe("leitor de planilha", () => {
     ]);
 
     const lida = await lerPlanilha(buffer);
-    const bruto = lida.linhas[0]?.["Data"] ?? "";
+    const bruto = lida.linhas[0]?.valores["Data"] ?? "";
 
     assert.ok(
       Number.isFinite(Date.parse(bruto)),
@@ -102,8 +102,8 @@ describe("leitor de planilha", () => {
 
     const lida = await lerPlanilha(Buffer.from(await workbook.xlsx.writeBuffer()));
 
-    assert.equal(lida.linhas[0]?.["Mensagem"], "quero um PC Gamer");
-    assert.equal(lida.linhas[0]?.["Total"], "2", "vale o resultado, não a fórmula");
+    assert.equal(lida.linhas[0]?.valores["Mensagem"], "quero um PC Gamer");
+    assert.equal(lida.linhas[0]?.valores["Total"], "2", "vale o resultado, não a fórmula");
   });
 
   it("pula as linhas em branco antes do cabeçalho", async () => {
@@ -134,8 +134,8 @@ describe("leitor de planilha", () => {
     const lida = await lerPlanilha(buffer);
 
     assert.equal(new Set(lida.cabecalhos).size, lida.cabecalhos.length, "sem repetição");
-    assert.equal(lida.linhas[0]?.["Nome"], "contato");
-    assert.equal(lida.linhas[0]?.["Nome (2)"], "atendente");
+    assert.equal(lida.linhas[0]?.valores["Nome"], "contato");
+    assert.equal(lida.linhas[0]?.valores["Nome (2)"], "atendente");
     assert.ok(
       lida.cabecalhos.some((c) => c.startsWith("Coluna")),
       "coluna sem título ganha nome próprio em vez de virar chave vazia",
@@ -154,7 +154,7 @@ describe("leitor de planilha", () => {
 
     assert.equal(lida.linhas.length, 2);
     assert.deepEqual(
-      lida.linhas.map((l) => l["Mensagem"]),
+      lida.linhas.map((l) => l.valores["Mensagem"]),
       ["bom dia", "boa tarde"],
     );
   });

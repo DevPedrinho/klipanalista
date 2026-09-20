@@ -22,6 +22,19 @@ import ExcelJS from "exceljs";
  * versoes da plataforma, e contas diferentes exportam colunas diferentes.
  */
 
+/**
+ * Uma linha de dados.
+ *
+ * O numero e o da linha NO ARQUIVO, nao o indice no array. Linhas vazias e o
+ * cabecalho sao descartados na leitura, entao os dois divergem — e quem for
+ * conferir um erro vai abrir a planilha e procurar a linha 42, nao a
+ * trigesima do array.
+ */
+export interface LinhaDaPlanilha {
+  numero: number;
+  valores: Record<string, string>;
+}
+
 /** Uma planilha lida: o que tem dentro, sem nenhuma interpretacao. */
 export interface PlanilhaLida {
   /** Nome de todas as abas, para quem precisar escolher outra. */
@@ -29,8 +42,8 @@ export interface PlanilhaLida {
   /** Aba efetivamente lida. */
   abaLida: string;
   cabecalhos: string[];
-  /** Cada linha como { cabecalho: valor }, na ordem do arquivo. */
-  linhas: Record<string, string>[];
+  /** Cada linha na ordem do arquivo. */
+  linhas: LinhaDaPlanilha[];
   /** Linhas ignoradas por estarem vazias. */
   linhasVazias: number;
 }
@@ -179,20 +192,20 @@ export async function lerPlanilha(
   }
 
   const maxLinhas = opcoes.maxLinhas ?? MAX_LINHAS_PADRAO;
-  const linhas: Record<string, string>[] = [];
+  const linhas: LinhaDaPlanilha[] = [];
   let linhasVazias = 0;
 
   escolhida.eachRow({ includeEmpty: false }, (row, numero) => {
     if (numero <= linhaDoCabecalho) return;
     if (linhas.length >= maxLinhas) return;
 
-    const valores = (row.values as ExcelJS.CellValue[]).slice(1);
-    const registro: Record<string, string> = {};
+    const celulas = (row.values as ExcelJS.CellValue[]).slice(1);
+    const valores: Record<string, string> = {};
     let temConteudo = false;
 
     cabecalhos.forEach((cabecalho, indice) => {
-      const texto = textoDaCelula(valores[indice] ?? null);
-      registro[cabecalho] = texto;
+      const texto = textoDaCelula(celulas[indice] ?? null);
+      valores[cabecalho] = texto;
       if (texto.trim().length > 0) temConteudo = true;
     });
 
@@ -201,7 +214,7 @@ export async function lerPlanilha(
       return;
     }
 
-    linhas.push(registro);
+    linhas.push({ numero, valores });
   });
 
   return { abas, abaLida: escolhida.name, cabecalhos, linhas, linhasVazias };

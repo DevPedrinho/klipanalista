@@ -1,4 +1,6 @@
 import "server-only";
+import { ehDataLegivel } from "./data-br";
+import type { LinhaDaPlanilha } from "./xlsx-reader";
 
 /**
  * De que coluna da planilha sai cada informacao.
@@ -63,12 +65,15 @@ function fracao(amostra: string[], teste: (v: string) => boolean): number {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function ehData(valor: string): boolean {
-  // Numero solto nao conta: "5" vira data em muitos parsers, e uma coluna de
-  // quantidade viraria a coluna de data.
-  if (/^\d+([.,]\d+)?$/.test(valor.trim())) return false;
-  return Number.isFinite(Date.parse(valor));
-}
+/*
+ * A deteccao usa EXATAMENTE a mesma leitura da normalizacao.
+ *
+ * Se as duas divergissem, a coluna seria escolhida aqui e rejeitada linha a
+ * linha depois — o importador apontaria a coluna certa e recusaria a planilha
+ * inteira, que e o tipo de contradicao que ninguem consegue diagnosticar pela
+ * tela.
+ */
+const ehData = ehDataLegivel;
 
 function ehTelefone(valor: string): boolean {
   const digitos = valor.replace(/\D/g, "");
@@ -216,13 +221,13 @@ const AMOSTRA = 40;
  */
 export function proporMapeamento(
   cabecalhos: string[],
-  linhas: Record<string, string>[],
+  linhas: LinhaDaPlanilha[],
 ): PropostaDeMapeamento {
   const amostraPorColuna = new Map<string, string[]>();
   for (const cabecalho of cabecalhos) {
     amostraPorColuna.set(
       cabecalho,
-      linhas.slice(0, AMOSTRA).map((l) => l[cabecalho] ?? ""),
+      linhas.slice(0, AMOSTRA).map((l) => l.valores[cabecalho] ?? ""),
     );
   }
 

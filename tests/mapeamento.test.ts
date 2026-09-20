@@ -4,6 +4,7 @@ import {
   lerVocabularioDaDirecao,
   proporMapeamento,
 } from "@/server/import/mapeamento";
+import type { LinhaDaPlanilha } from "@/server/import/xlsx-reader";
 
 /**
  * Proposta de mapeamento de colunas.
@@ -13,16 +14,14 @@ import {
  * os testes cobrem formatos diferentes do mesmo relatório, não um só.
  */
 
-function linhas(
-  colunas: string[],
-  valores: string[][],
-): Record<string, string>[] {
-  return valores.map((linha) => {
+function linhas(colunas: string[], valores: string[][]): LinhaDaPlanilha[] {
+  return valores.map((linha, indice) => {
     const registro: Record<string, string> = {};
     colunas.forEach((c, i) => {
       registro[c] = linha[i] ?? "";
     });
-    return registro;
+    // +2: a linha 1 e o cabecalho, e a planilha conta a partir de 1.
+    return { numero: indice + 2, valores: registro };
   });
 }
 
