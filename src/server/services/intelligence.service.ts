@@ -656,6 +656,24 @@ export async function loadOverview(params: {
   });
 }
 
+/**
+ * Quais modelos efetivamente leram as conversas desta execucao.
+ *
+ * Quase sempre um so. Vira dois quando o provedor principal recusou no meio
+ * da varredura e a leitura caiu para o reserva — e e justamente ai que o
+ * campo precisa dizer a verdade, porque e a unica pista visivel de que o
+ * principal parou.
+ */
+function modelosQueLeram(analises: Map<string, ResultadoDaAnalise>): string {
+  const vistos = new Set<string>();
+
+  for (const analise of analises.values()) {
+    if (analise.modelo) vistos.add(analise.modelo);
+  }
+
+  return vistos.size > 0 ? [...vistos].sort().join(" + ") : getModelo();
+}
+
 /* ==========================================================================
    Motor de analise
    ========================================================================== */
@@ -1009,7 +1027,11 @@ export async function analisarConjunto(params: {
             sinaisAceitos,
             sinaisDescartados,
             motivosDeDescarte,
-            modelo: getModelo(),
+            // Quem REALMENTE leu, nao quem foi configurado: com reserva, a
+            // leitura pode ter caido para o outro provedor no meio da
+            // varredura. Reportar o configurado esconderia exatamente o que
+            // se quer saber — que o principal parou.
+            modelo: modelosQueLeram(analises),
           },
         }
       : {}),

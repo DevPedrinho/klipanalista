@@ -1,6 +1,8 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
 import { getEnv } from "@/server/config/env";
+import { comReserva, ehProvedor, type Analista, type NomeDoProvedor } from "./provedor";
+import { criarAnalistaAnthropic } from "./provedores/anthropic";
+import { criarAnalistaOpenAi } from "./provedores/openai";
 
 /**
  * Cliente da IA.
@@ -14,29 +16,95 @@ import { getEnv } from "@/server/config/env";
  */
 
 /**
- * Modelo usado na analise.
+ * Modelo usado na analise, por provedor.
  *
  * Ler uma conversa comercial e decidir se ha oportunidade e julgamento, nao
  * classificacao mecanica: depende de entender quem disse o que, se o "vou
  * pensar" e educado ou real, se o orcamento foi aprovado de fato ou so
  * mencionado. E o tipo de tarefa que paga um modelo forte.
  *
- * Sobrescritivel em AI_MODEL para quem preferir outro ponto de custo.
+ * Sobrescritivel em AI_MODEL para quem preferir outro ponto de custo — e a
+ * alavanca de custo mais direta que existe aqui.
  */
-export const MODELO_PADRAO = "claude-opus-5";
+export const MODELO_PADRAO: Record<NomeDoProvedor, string> = {
+  anthropic: "claude-opus-5",
+  openai: "gpt-5.1",
+};
 
-let cliente: Anthropic | null = null;
-
-export function getAiClient(): Anthropic | null {
-  const { aiProviderApiKey } = getEnv();
-  if (!aiProviderApiKey) return null;
-
-  cliente ??= new Anthropic({ apiKey: aiProviderApiKey });
-  return cliente;
+/**
+ * Qual provedor atende primeiro.
+ *
+ * O outro, quando tem credencial, vira reserva automatica. Nao e refinamento:
+ * quando o credito da Anthropic acabou, a leitura por IA parou inteira e o
+ * painel passou dias so com a deteccao deterministica.
+ */
+export function getProvedor(): NomeDoProvedor {
+  const bruto = process.env["AI_PROVIDER"]?.trim().toLowerCase() ?? "";
+  return ehProvedor(bruto) ? bruto : "anthropic";
 }
 
-export function getModelo(): string {
-  return process.env["AI_MODEL"]?.trim() || MODELO_PADRAO;
+export function getModelo(provedor: NomeDoProvedor = getProvedor()): string {
+  const escolhido = process.env["AI_MODEL"]?.trim();
+
+  /*
+   * `AI_MODEL` vale so para o provedor principal.
+   *
+   * Um nome de modelo nao atravessa fronteira: mandar `claude-opus-5` para a
+   * OpenAI so produziria um erro a cada conversa. O reserva usa o padrao
+   * dele, e quem quiser outro usa `AI_MODEL_RESERVA`.
+   */
+  if (provedor === getProvedor() && escolhido) return escolhido;
+
+  if (provedor !== getProvedor()) {
+    const doReserva = process.env["AI_MODEL_RESERVA"]?.trim();
+    if (doReserva) return doReserva;
+  }
+
+  return MODELO_PADRAO[provedor];
+}
+
+/** Credencial de cada provedor. `AI_PROVIDER_API_KEY` segue sendo a Anthropic. */
+function getChave(provedor: NomeDoProvedor): string | undefined {
+  if (provedor === "anthropic") return getEnv().aiProviderApiKey;
+
+  const bruta = process.env["OPENAI_API_KEY"]?.trim();
+  return bruta && bruta.length > 0 ? bruta : undefined;
+}
+
+const analistas = new Map<NomeDoProvedor, Analista>();
+
+function criar(provedor: NomeDoProvedor): Analista | null {
+  const apiKey = getChave(provedor);
+  if (!apiKey) return null;
+
+  const existente = analistas.get(provedor);
+  if (existente) return existente;
+
+  const modelo = getModelo(provedor);
+  const novo =
+    provedor === "anthropic"
+      ? criarAnalistaAnthropic({ apiKey, modelo })
+      : criarAnalistaOpenAi({ apiKey, modelo });
+
+  analistas.set(provedor, novo);
+  return novo;
+}
+
+/**
+ * O analista que atende, com reserva quando houver credencial dos dois.
+ *
+ * `null` quando nenhum provedor esta configurado — e o caso em que a analise
+ * segue so com a deteccao deterministica, dizendo isso na tela.
+ */
+export function getAnalista(): Analista | null {
+  const preferido = getProvedor();
+  const outro: NomeDoProvedor = preferido === "anthropic" ? "openai" : "anthropic";
+
+  const principal = criar(preferido) ?? criar(outro);
+  if (!principal) return null;
+
+  const reserva = principal.provedor === preferido ? criar(outro) : null;
+  return comReserva(principal, reserva ?? undefined);
 }
 
 /**
@@ -79,10 +147,10 @@ export function getConcorrencia(): number {
 
 /** Diz se a analise por IA esta disponivel nesta instalacao. */
 export function aiHabilitada(): boolean {
-  return Boolean(getEnv().aiProviderApiKey);
+  return Boolean(getChave("anthropic") ?? getChave("openai"));
 }
 
-/** Apenas para testes: descarta o cliente memorizado. */
+/** Apenas para testes: descarta os analistas memorizados. */
 export function resetAiClient(): void {
-  cliente = null;
+  analistas.clear();
 }

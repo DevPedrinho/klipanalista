@@ -3,12 +3,11 @@ import "server-only";
 // pacote instalado (3.25) publica essa API no subcaminho `zod/v4`, entao este
 // arquivo — e so ele — usa esse import. O resto do projeto segue no v3.
 import * as z from "zod/v4";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import Anthropic from "@anthropic-ai/sdk";
 import type { ConversationSnapshot, DetectedSignal } from "@/domain/types";
 import { SIGNAL_CATALOG } from "@/server/scoring/signals";
 import { maskEmail, maskPhone } from "@/server/security/masking";
-import { getAiClient, getEsforco, getModelo } from "./client";
+import { getAnalista, getEsforco } from "./client";
+import { AiIndisponivelError, type Analista, type NomeDoProvedor } from "./provedor";
 
 /**
  * Analista de oportunidades.
@@ -208,6 +207,16 @@ export interface ResultadoDaAnalise {
   justificativa: string;
   /** Sinais recusados por citarem trecho inexistente. */
   descartados: { codigo: string; trecho: string; motivo: string }[];
+  /**
+   * Quem efetivamente leu esta conversa.
+   *
+   * Pode nao ser o provedor preferido: quando ele recusa, a leitura cai para
+   * o reserva. Registrar isso e o que impede a troca de acontecer em
+   * silencio — e sem saber qual modelo leu o que, comparar custo por analise
+   * aproveitada seria impossivel.
+   */
+  provedor?: NomeDoProvedor;
+  modelo?: string;
 }
 
 /* --------------------------------------------------------------------------
@@ -578,20 +587,17 @@ export function verificarAnalise(
    Chamada
    -------------------------------------------------------------------------- */
 
-export class AiIndisponivelError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AiIndisponivelError";
-  }
-}
+export { AiIndisponivelError };
 
 export async function analisarConversa(params: {
   conversation: ConversationSnapshot;
   contactName: string;
   signal?: AbortSignal;
+  /** Injetavel para teste: prova que a verificacao independe do provedor. */
+  analista?: Analista;
 }): Promise<ResultadoDaAnalise | null> {
-  const client = getAiClient();
-  if (!client) return null;
+  const analista = params.analista ?? getAnalista();
+  if (!analista) return null;
 
   const mensagens = prepararMensagens(params.conversation);
 
@@ -600,53 +606,37 @@ export async function analisarConversa(params: {
 
   const transcricao = montarTranscricao(mensagens);
 
-  try {
-    const resposta = await client.messages.parse({
-        model: getModelo(),
-        max_tokens: 16000,
-        thinking: { type: "adaptive" },
-        // Esforco baixo por padrao: ver client.ts. A medicao contra a conta
-        // real mostrou que o esforco alto custava 53 das 57 conversas.
-        output_config: { effort: getEsforco(), format: zodOutputFormat(AnaliseSchema) },
-        // As instrucoes e o catalogo sao identicos em toda conversa da
-        // varredura: marcar o prefixo como cacheavel evita reenviar o mesmo
-        // conteudo dezenas de vezes por analise.
-        system: [
-          { type: "text", text: INSTRUCOES, cache_control: { type: "ephemeral" } },
-        ],
-        messages: [
-          {
-            role: "user",
-            content:
-              `Atendimento com ${params.contactName}, canal ${params.conversation.channel}.\n\n` +
-              `${transcricao}\n\n` +
-              `Analise este atendimento conforme as regras.`,
-          },
-        ],
-      },
-      params.signal ? { signal: params.signal } : undefined,
-    );
+  const resposta = await analista.analisar({
+    // O prefixo estavel vai separado: e identico em toda conversa da
+    // varredura, e cada provedor aproveita isso do jeito dele.
+    sistema: INSTRUCOES,
+    usuario:
+      `Atendimento com ${params.contactName}, canal ${params.conversation.channel}.\n\n` +
+      `${transcricao}\n\n` +
+      `Analise este atendimento conforme as regras.`,
+    schema: AnaliseSchema,
+    // Esforco baixo por padrao: ver client.ts. A medicao contra a conta real
+    // mostrou que o esforco alto custava 53 das 57 conversas.
+    esforco: getEsforco(),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
 
-    const analise = resposta.parsed_output;
-    if (!analise) return null;
+  /*
+   * A saida e revalidada aqui, mesmo ja tendo passado pelo SDK.
+   *
+   * Cada provedor converte do seu jeito, e confiar nessa conversao deixaria a
+   * garantia depender de qual deles atendeu. Revalidar contra o MESMO schema
+   * faz toda resposta entrar pela mesma porta — custa quase nada e e o que
+   * torna a troca de provedor segura.
+   */
+  const conferida = AnaliseSchema.safeParse(resposta.saida);
+  if (!conferida.success) return null;
 
-    return verificarAnalise(analise, mensagens);
-  } catch (erro) {
-    if (erro instanceof Anthropic.AuthenticationError) {
-      throw new AiIndisponivelError(
-        "A credencial da IA foi recusada. Confira AI_PROVIDER_API_KEY.",
-      );
-    }
-    if (erro instanceof Anthropic.RateLimitError) {
-      throw new AiIndisponivelError(
-        "Limite de requisicoes da IA atingido. A analise continua sem ela.",
-      );
-    }
-    if (erro instanceof Anthropic.APIError) {
-      throw new AiIndisponivelError(`A IA respondeu ${erro.status}: ${erro.message}`);
-    }
-    throw erro;
-  }
+  return {
+    ...verificarAnalise(conferida.data, mensagens),
+    provedor: resposta.provedor,
+    modelo: resposta.modelo,
+  };
 }
 
 /** Exportado para teste: o preparo e deterministico e vale conferir. */
