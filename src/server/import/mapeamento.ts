@@ -1,5 +1,7 @@
 import "server-only";
+import { normalizeChannel } from "@/server/integration/adapters/sessions.adapter";
 import { ehDataLegivel } from "./data-br";
+import { extrairIdDaSessao } from "./id-da-sessao";
 import type { LinhaDaPlanilha } from "./xlsx-reader";
 
 /**
@@ -41,8 +43,19 @@ export interface DefinicaoDeCampo {
   paraQue: string;
   /** Heuristica pelo NOME do cabecalho. */
   padroes: RegExp[];
+  /**
+   * Nome mais especifico, que desempata entre colunas que casam `padroes`.
+   *
+   * Existe por causa do relatorio real: `Conta/Nome` e `Contato/Nome` casam
+   * igualmente "nome", e a primeira e o nome da EMPRESA que exportou.
+   */
+  preferidos?: RegExp[];
+  /** Nome que diz ser OUTRA coisa. Veta a coluna, por melhor que seja o resto. */
+  naoE?: RegExp[];
   /** Heuristica pelo FORMATO dos valores: 0 a 1. */
   pontuarValores?: (amostra: string[]) => number;
+  /** Conteudo que desqualifica a coluna para este campo. */
+  vetarValores?: (amostra: string[]) => boolean;
 }
 
 /** Normaliza para comparar: minusculas, sem acento, sem pontuacao. */
@@ -74,6 +87,35 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * tela.
  */
 const ehData = ehDataLegivel;
+
+/**
+ * Cara de identificador: uma palavra so, sem espaco.
+ *
+ * O padrao de nome de `contatoId` aceita "Contato/Nome" (o "id" e opcional,
+ * para pegar "Contato" sozinho), e no relatorio real foi exatamente isso que
+ * aconteceu: a coluna de NOME virou a identidade do contato. Nome de gente
+ * tem espaco; id nao tem.
+ */
+function pareceIdentificador(valor: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:@-]{2,}$/.test(valor.trim());
+}
+
+function naoPareceIdentificador(amostra: string[]): boolean {
+  const preenchidos = amostra.filter((v) => v.trim().length > 0);
+  return preenchidos.length > 0 && fracao(preenchidos, pareceIdentificador) < 0.5;
+}
+
+/**
+ * O mesmo valor em toda a amostra.
+ *
+ * Nome do contato varia de atendimento para atendimento; o nome da conta que
+ * exportou (`Conta/Nome` = "UPAR GAMES" nas 15.732 linhas) nao. Como a amostra
+ * e espalhada pelo arquivo, cinco linhas iguais ja dizem muito.
+ */
+function constante(amostra: string[]): boolean {
+  const preenchidos = amostra.map((v) => v.trim()).filter((v) => v.length > 0);
+  return preenchidos.length >= 5 && new Set(preenchidos).size === 1;
+}
 
 function ehTelefone(valor: string): boolean {
   const digitos = valor.replace(/\D/g, "");
@@ -110,7 +152,12 @@ export const DEFINICOES: DefinicaoDeCampo[] = [
     paraQue:
       "Agrupa as mensagens numa conversa. Sem isso cada linha vira um atendimento solto.",
     padroes: [/\b(id|codigo|numero)?\s*(do\s*)?(atendimento|conversa|sessao|session|ticket|protocolo)\b/],
-    pontuarValores: (a) => Math.max(fracao(a, (v) => UUID.test(v.trim())), 0),
+    naoE: [/\b(mensagem|message|contato|contact|cliente)\b/],
+    // Aceita tambem o LINK do atendimento, que e o que o relatorio da
+    // KlipFlowi traz — a mesma leitura que a normalizacao aplica depois.
+    pontuarValores: (a) => fracao(a, (v) => extrairIdDaSessao(v) !== null),
+    vetarValores: (a) =>
+      naoPareceIdentificador(a) && fracao(a, (v) => extrairIdDaSessao(v) !== null) < 0.5,
   },
   {
     campo: "texto",
@@ -148,8 +195,19 @@ export const DEFINICOES: DefinicaoDeCampo[] = [
     obrigatorio: false,
     paraQue:
       "É o que permite etiquetar e criar card de volta na KlipFlowi. Sem ele (e sem telefone) dá para analisar, mas não para escrever.",
-    padroes: [/\b(id|codigo)?\s*(do\s*)?(contato|cliente|lead|contact|customer)\b/],
+    // O "id" no nome e obrigatorio. Sem ele, `Contato/Nome` e
+    // `Contato/Instagram` casavam — e o relatorio real, que NAO tem id de
+    // contato, ganhava um falso. Coluna chamada so "Contato" ainda entra, pelo
+    // conteudo, se trouxer UUID.
+    padroes: [
+      /\b(id|codigo|uuid)\b.*\b(contato|cliente|lead|contact|customer)\b/,
+      /\b(contato|cliente|lead|contact|customer)\b.*\b(id|codigo|uuid)\b/,
+    ],
+    naoE: [
+      /\b(mensagem|message|conta|account|canal|channel|atendimento|conversa|sessao)\b/,
+    ],
     pontuarValores: (a) => fracao(a, (v) => UUID.test(v.trim())),
+    vetarValores: naoPareceIdentificador,
   },
   {
     campo: "telefone",
@@ -165,6 +223,9 @@ export const DEFINICOES: DefinicaoDeCampo[] = [
     obrigatorio: false,
     paraQue: "Aparece no card da oportunidade.",
     padroes: [/\b(nome|cliente|contato|name)\b/],
+    preferidos: [/\b(contato|cliente|lead|contact|customer)\b/],
+    naoE: [/\b(conta|account|canal|channel|atendente|operador|agente|usuario)\b/],
+    vetarValores: constante,
   },
   {
     campo: "canal",
@@ -172,14 +233,24 @@ export const DEFINICOES: DefinicaoDeCampo[] = [
     obrigatorio: false,
     paraQue: "WhatsApp, Instagram, e-mail. Sem isso o canal aparece como “outro”.",
     padroes: [/\b(canal|channel|midia|meio|origem\s*do\s*contato)\b/],
+    // O relatorio real traz `Canal/Chave` (@upargames) e `Canal/Plataforma`
+    // (WhatsApp): so a segunda diz o canal.
+    pontuarValores: (a) => fracao(a, (v) => normalizeChannel(v) !== "OUTRO"),
   },
   {
     campo: "atendenteId",
     rotulo: "Atendente (id)",
     obrigatorio: false,
     paraQue: "Define quem vê o quê, quando o perfil não é administrador.",
-    padroes: [/\b(id|codigo)?\s*(do\s*)?(atendente|operador|agente|responsavel|usuario|agent|user)\b/],
+    padroes: [
+      /\b(id|codigo|uuid)\b.*\b(atendente|operador|agente|responsavel|usuario|agent|user)\b/,
+      /\b(atendente|operador|agente|responsavel|usuario|agent|user)\b.*\b(id|codigo|uuid)\b/,
+    ],
+    naoE: [
+      /\b(mensagem|message|conta|account|canal|channel|contato|contact|cliente)\b/,
+    ],
     pontuarValores: (a) => fracao(a, (v) => UUID.test(v.trim())),
+    vetarValores: naoPareceIdentificador,
   },
   {
     campo: "atendenteNome",
@@ -278,13 +349,17 @@ export function proporMapeamento(
       const nome = normalizar(coluna);
       const amostra = amostraPorColuna.get(coluna) ?? [];
 
+      if (definicao.naoE?.some((p) => p.test(nome))) continue;
+      if (definicao.vetarValores?.(amostra)) continue;
+
       const porNome = definicao.padroes.some((p) => p.test(nome));
+      const preferido = porNome && (definicao.preferidos?.some((p) => p.test(nome)) ?? false);
       const pontosDeValor = definicao.pontuarValores?.(amostra) ?? 0;
 
       // Só conta como evidência de conteúdo quando a maioria da amostra bate.
       const porValor = pontosDeValor >= 0.7;
 
-      const pontos = (porNome ? 0.6 : 0) + pontosDeValor * 0.6;
+      const pontos = (porNome ? 0.6 : 0) + (preferido ? 0.2 : 0) + pontosDeValor * 0.6;
       if (pontos <= 0) continue;
 
       candidatos.push({ campo: definicao.campo, coluna, pontos, porNome, porValor });

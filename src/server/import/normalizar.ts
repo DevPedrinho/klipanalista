@@ -2,6 +2,7 @@ import "server-only";
 import type { ContactSnapshot, ConversationSnapshot, MessageSnapshot } from "@/domain/types";
 import { normalizeChannel } from "@/server/integration/adapters/sessions.adapter";
 import { interpretarData } from "./data-br";
+import { extrairIdDaSessao } from "./id-da-sessao";
 import type { Mapeamento } from "./mapeamento";
 import type { LinhaDaPlanilha } from "./xlsx-reader";
 
@@ -166,7 +167,10 @@ export function normalizarPlanilha(
   const porSessao = new Map<string, Acumulada>();
 
   for (const linha of linhas) {
-    const sessionId = ler(linha, colunaSessao);
+    // Link do atendimento vira o id que ele carrega: senao a URL inteira
+    // seria o id, e a mesma conversa nao casaria com a busca pela API.
+    const brutoSessao = ler(linha, colunaSessao);
+    const sessionId = extrairIdDaSessao(brutoSessao) ?? brutoSessao;
     if (!sessionId) {
       rejeicoes.registrar("Sem identificador de atendimento.", linha.numero);
       continue;

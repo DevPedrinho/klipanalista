@@ -11,20 +11,32 @@ import {
   proporMapeamento,
 } from "@/server/import/mapeamento";
 import { normalizarPlanilha } from "@/server/import/normalizar";
+import {
+  detectarColunaDaSessao,
+  montarIndiceDeSessoes,
+} from "@/server/import/indice-de-sessoes";
 import type { Mapeamento } from "@/server/import/mapeamento";
 
 /**
  * POST /api/intelligence/importar
  *
- * Recebe o relatorio `.xlsx` exportado da KlipFlowi e devolve as conversas
- * normalizadas — sem analisar e sem tocar no CRM.
+ * Recebe o relatorio `.xlsx` exportado da KlipFlowi e devolve a lista de
+ * atendimentos que ele cita — sem analisar e sem tocar no CRM.
  *
- * DOIS PASSOS NA MESMA ROTA
+ * CAMINHO PRINCIPAL: A PLANILHA COMO INDICE
  *
- * Sem `mapeamento`, responde com cabecalhos, amostra e a PROPOSTA de
- * mapeamento: e o passo em que a pessoa confere de que coluna sai cada coisa.
- * Com `mapeamento` confirmado, responde com as conversas prontas para a
- * analise.
+ * O relatorio da KlipFlowi nao traz transcricao de audio, direcao nem id de
+ * contato — mas traz o link de cada atendimento. Sem nenhum campo extra, a
+ * resposta ja inclui `indiceDeSessoes`: a lista de atendimentos unicos, que a
+ * tela busca pela API em lotes. Se a coluna detectada estiver errada, a pessoa
+ * reenvia com `colunaDaSessao` e recebe so o indice (`etapa: "SESSOES"`).
+ *
+ * CAMINHO RESERVA: A PLANILHA COMO CONTEUDO
+ *
+ * Para quando nao ha como buscar pela API. Sem `mapeamento`, a resposta traz
+ * tambem a PROPOSTA de mapeamento; com `mapeamento` confirmado, responde com
+ * as conversas lidas da propria planilha — sem transcricao de audio, e a tela
+ * precisa dizer isso.
  *
  * ONDE OS DADOS FICAM
  *
@@ -101,6 +113,38 @@ export async function POST(request: NextRequest) {
 
     const proposta = proporMapeamento(planilha.cabecalhos, planilha.linhas);
 
+    /*
+     * Nome, telefone, canal e data acompanham o indice so para a pessoa
+     * reconhecer o que vai ser buscado. Vem da proposta, sem confirmacao: se
+     * errar, erra a previa, nunca a analise — que le a versao da API.
+     */
+    const extrasDoIndice = {
+      ...(proposta.mapeamento.contatoNome ? { contatoNome: proposta.mapeamento.contatoNome } : {}),
+      ...(proposta.mapeamento.telefone ? { telefone: proposta.mapeamento.telefone } : {}),
+      ...(proposta.mapeamento.canal ? { canal: proposta.mapeamento.canal } : {}),
+      ...(proposta.mapeamento.dataHora ? { dataHora: proposta.mapeamento.dataHora } : {}),
+    };
+
+    /* --- Coluna do atendimento escolhida a mao: devolve so o indice ------- */
+    const colunaEscolhida = form.get("colunaDaSessao");
+    if (typeof colunaEscolhida === "string" && colunaEscolhida.length > 0) {
+      if (!planilha.cabecalhos.includes(colunaEscolhida)) {
+        return fail(
+          "PARAMETROS_INVALIDOS",
+          `A coluna "${colunaEscolhida.slice(0, 80)}" nao existe na aba "${planilha.abaLida}".`,
+        );
+      }
+
+      return ok(
+        {
+          etapa: "SESSOES" as const,
+          abaLida: planilha.abaLida,
+          indiceDeSessoes: montarIndiceDeSessoes(planilha.linhas, colunaEscolhida, extrasDoIndice),
+        },
+        { dataMode: readiness.dataMode },
+      );
+    }
+
     /* --- Passo 1: a pessoa ainda precisa confirmar o mapeamento ----------- */
     const mapeamentoBruto = mapeamentoSchema.safeParse(
       form.get("mapeamento") ? JSON.parse(String(form.get("mapeamento"))) : undefined,
@@ -117,9 +161,17 @@ export async function POST(request: NextRequest) {
       : { valores: [], precisaConfirmar: true };
 
     if (!mapeamento) {
+      const colunaDaSessao = detectarColunaDaSessao(planilha.cabecalhos, planilha.linhas);
+
       return ok(
         {
           etapa: "MAPEAR" as const,
+          colunaDaSessao,
+          // null quando nenhuma coluna rende id: a tela pede a coluna a mao
+          // ou cai no caminho reserva.
+          indiceDeSessoes: colunaDaSessao
+            ? montarIndiceDeSessoes(planilha.linhas, colunaDaSessao.coluna, extrasDoIndice)
+            : null,
           abas: planilha.abas,
           abaLida: planilha.abaLida,
           cabecalhos: planilha.cabecalhos,

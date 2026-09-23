@@ -82,6 +82,54 @@ describe("rota de importação — primeiro passo, propor o mapeamento", () => {
   });
 });
 
+describe("rota de importação — a planilha como índice de atendimentos", () => {
+  it("já no primeiro envio devolve a lista de atendimentos únicos", async () => {
+    const resposta = await POST(
+      pedido({ accountId: "klipflowi", arquivo: arquivo(await planilhaDeExemplo()) }),
+    );
+
+    const dados = (await corpo(resposta))["data"] as Record<string, unknown>;
+    const coluna = dados["colunaDaSessao"] as { coluna: string };
+    const indice = dados["indiceDeSessoes"] as {
+      sessoes: Array<{ sessionId: string; linhas: number; telefone?: string }>;
+    };
+
+    assert.equal(coluna.coluna, "Atendimento");
+    assert.equal(indice.sessoes.length, 1, "duas mensagens, um atendimento");
+    assert.equal(indice.sessoes[0]?.sessionId, SESSAO);
+    assert.equal(indice.sessoes[0]?.linhas, 2);
+    assert.equal(indice.sessoes[0]?.telefone, "(85) 99999-9962", "para a pessoa reconhecer");
+  });
+
+  it("aceita a coluna escolhida à mão e devolve só o índice", async () => {
+    const resposta = await POST(
+      pedido({
+        accountId: "klipflowi",
+        arquivo: arquivo(await planilhaDeExemplo()),
+        colunaDaSessao: "Atendimento",
+      }),
+    );
+
+    assert.equal(resposta.status, 200);
+    const dados = (await corpo(resposta))["data"] as Record<string, unknown>;
+    assert.equal(dados["etapa"], "SESSOES");
+    assert.equal((dados["indiceDeSessoes"] as { sessoes: unknown[] }).sessoes.length, 1);
+  });
+
+  it("recusa coluna escolhida que não existe, dizendo qual", async () => {
+    const resposta = await POST(
+      pedido({
+        accountId: "klipflowi",
+        arquivo: arquivo(await planilhaDeExemplo()),
+        colunaDaSessao: "Não existe",
+      }),
+    );
+
+    assert.equal(resposta.status, 400);
+    assert.match(JSON.stringify(await corpo(resposta)), /Não existe/);
+  });
+});
+
 describe("rota de importação — segundo passo, normalizar", () => {
   it("devolve as conversas quando o mapeamento vem confirmado", async () => {
     const resposta = await POST(
