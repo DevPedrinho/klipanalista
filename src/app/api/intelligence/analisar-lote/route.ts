@@ -4,6 +4,7 @@ import { agentsAdapter, panelsAdapter, tagsAdapter } from "@/server/integration/
 import { getIntegrationReadiness } from "@/server/config/env";
 import { failValidation, handleError, ok } from "@/server/http/respond";
 import { analisarConjunto } from "@/server/services/intelligence.service";
+import { buscarConversasPorId } from "@/server/services/busca-por-id.service";
 import { getSettings } from "@/server/services/settings.service";
 import { buildTenantContext, resolvePeriod } from "@/server/security/tenant-context";
 import type { ContactSnapshot, ConversationSnapshot } from "@/domain/types";
@@ -11,8 +12,16 @@ import type { ContactSnapshot, ConversationSnapshot } from "@/domain/types";
 /**
  * POST /api/intelligence/analisar-lote
  *
- * Analisa um punhado de conversas vindas da planilha e devolve as
- * oportunidades daquele punhado.
+ * Analisa um punhado de atendimentos e devolve as oportunidades daquele
+ * punhado. Aceita duas entradas:
+ *
+ *   `sessionIds` — o caminho principal. Os ids sairam da planilha (a coluna
+ *   com o link do atendimento), e cada conversa e buscada na API por id, com
+ *   transcricao de audio, direcao e contato de verdade. A resposta traz um
+ *   veredito por id, para o navegador saber o que repetir.
+ *
+ *   `conversas` — o caminho reserva, quando nao ha como buscar na API: as
+ *   conversas ja vem montadas da propria planilha.
  *
  * POR QUE EM LOTES, DIRIGIDO PELO NAVEGADOR
  *
@@ -27,9 +36,10 @@ import type { ContactSnapshot, ConversationSnapshot } from "@/domain/types";
  *
  * O QUE ESTA ROTA LE DA API
  *
- * So cadastro: etiquetas, paineis e usuarios. Sao listas pequenas e sao
+ * Sempre o cadastro: etiquetas, paineis e usuarios. Sao listas pequenas e
  * indispensaveis — sem as etiquetas da conta nao ha o que sugerir, e sem os
- * usuarios nao ha escopo de visibilidade. As CONVERSAS vem da planilha.
+ * usuarios nao ha escopo de visibilidade. No caminho por id, tambem cada
+ * conversa e o contato dela.
  */
 
 export const dynamic = "force-dynamic";
@@ -43,6 +53,26 @@ export const maxDuration = 60;
  * navegador quebra a lista neste tamanho; o teto aqui e a rede de seguranca.
  */
 export const MAX_POR_LOTE = 25;
+
+/**
+ * Teto de ids por chamada, no caminho que busca na API.
+ *
+ * Menor que `MAX_POR_LOTE` porque aqui a mesma chamada ainda BUSCA: cada id
+ * custa ao menos tres requisicoes (conversa, mensagens, contato), que passam
+ * pelo limitador de vazao antes de a IA comecar a ler.
+ */
+export const MAX_IDS_POR_LOTE = 20;
+
+/**
+ * Quanto da chamada pode ir para a busca na API.
+ *
+ * O resto e da leitura por IA, que tem o proprio orcamento (35 s). Somados
+ * ficam abaixo dos 60 s da plataforma. O que nao couber volta como
+ * `NAO_INICIADA` e entra no proximo lote — nada se perde.
+ */
+const TEMPO_DE_BUSCA_MS = 15_000;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const mensagemSchema = z.object({
   id: z.string().min(1).max(200),
@@ -82,17 +112,31 @@ const contatoSchema = z.object({
   company: z.string().max(200).optional(),
 });
 
-const bodySchema = z.object({
-  accountId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
-  userId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
-  conversas: z.array(conversaSchema).min(1).max(MAX_POR_LOTE),
-  contatos: z.array(contatoSchema).max(MAX_POR_LOTE * 2).default([]),
-  /** Desliga a leitura por IA, para comparar os dois motores. */
-  semIa: z.boolean().optional(),
-});
+const bodySchema = z
+  .object({
+    accountId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+    userId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+    conversas: z.array(conversaSchema).min(1).max(MAX_POR_LOTE).optional(),
+    contatos: z.array(contatoSchema).max(MAX_POR_LOTE * 2).default([]),
+    /**
+     * UUID e nada mais: o id vai para o caminho da URL da API, e aceitar
+     * texto livre ali seria abrir a porta para `../` num caminho autenticado.
+     */
+    sessionIds: z
+      .array(z.string().regex(UUID, "Id de atendimento deve ser um UUID."))
+      .min(1)
+      .max(MAX_IDS_POR_LOTE)
+      .optional(),
+    /** Desliga a leitura por IA, para comparar os dois motores. */
+    semIa: z.boolean().optional(),
+  })
+  .refine((b) => (b.conversas === undefined) !== (b.sessionIds === undefined), {
+    message: "Envie `sessionIds` (buscar na API) ou `conversas` (da planilha), um dos dois.",
+  });
 
 export async function POST(request: NextRequest) {
   try {
+    const inicio = Date.now();
     const readiness = getIntegrationReadiness();
 
     const json = await request.json().catch(() => null);
@@ -109,10 +153,39 @@ export async function POST(request: NextRequest) {
       allUsers: users.data,
     });
 
-    const [tags, panels] = await Promise.all([
+    const [tags, panels, busca] = await Promise.all([
       tagsAdapter.list({ accountId: input.accountId }),
       panelsAdapter.list({ accountId: input.accountId }),
+      input.sessionIds
+        ? buscarConversasPorId({
+            accountId: input.accountId,
+            sessionIds: input.sessionIds.map((id) => id.toLowerCase()),
+            prazo: inicio + TEMPO_DE_BUSCA_MS,
+          })
+        : null,
     ]);
+
+    const conversas = busca
+      ? busca.conversas
+      : ((input.conversas ?? []) as ConversationSnapshot[]);
+    const contatos = busca ? busca.contatos : (input.contatos as ContactSnapshot[]);
+
+    /*
+     * Nenhuma conversa carregada: nao ha o que analisar, mas os vereditos
+     * precisam voltar mesmo assim — sao eles que dizem a tela o que repetir.
+     */
+    if (conversas.length === 0) {
+      return ok(
+        {
+          oportunidades: [],
+          conversasRecebidas: 0,
+          ...(busca ? { buscas: busca.buscas } : {}),
+          sourceFailures: busca?.sourceFailures ?? [],
+          pendingValidation: busca?.pendingValidation ?? [],
+        },
+        { dataMode: readiness.dataMode },
+      );
+    }
 
     /*
      * O periodo e derivado das proprias conversas do lote.
@@ -121,7 +194,7 @@ export async function POST(request: NextRequest) {
      * poderia jogar fora conversa que a pessoa pediu para analisar. A janela e
      * esticada em um dia para cada lado para que nenhuma fique na borda.
      */
-    const instantes = input.conversas.map((c) => Date.parse(c.lastMessageAt));
+    const instantes = conversas.map((c) => Date.parse(c.lastMessageAt));
     const validos = instantes.filter((n) => Number.isFinite(n));
     const UM_DIA = 24 * 60 * 60 * 1000;
 
@@ -136,8 +209,8 @@ export async function POST(request: NextRequest) {
 
     const overview = await analisarConjunto({
       dados: {
-        conversations: input.conversas as ConversationSnapshot[],
-        contacts: input.contatos as ContactSnapshot[],
+        conversations: conversas,
+        contacts: contatos,
         // Cards e funil nao entram por lote: dependem da conta inteira e
         // seriam recalculados a cada chamada, dizendo coisas diferentes a cada
         // vez. O funil continua vindo da Central.
@@ -150,12 +223,16 @@ export async function POST(request: NextRequest) {
       context,
       filters: { period },
       ...(input.semIa === undefined ? {} : { semIa: input.semIa }),
+      ...(busca
+        ? { coleta: { sourceFailures: [...busca.sourceFailures], pending: busca.pendingValidation } }
+        : {}),
     });
 
     return ok(
       {
         oportunidades: overview.opportunities,
-        conversasRecebidas: input.conversas.length,
+        conversasRecebidas: conversas.length,
+        ...(busca ? { buscas: busca.buscas } : {}),
         ...(overview.aiStats ? { aiStats: overview.aiStats } : {}),
         sourceFailures: overview.sourceFailures,
         pendingValidation: overview.pendingValidation,
