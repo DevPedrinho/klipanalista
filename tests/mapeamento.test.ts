@@ -181,3 +181,105 @@ describe("vocabulário da direção", () => {
     );
   });
 });
+
+/**
+ * Amostragem espalhada pelo arquivo.
+ *
+ * Achado contra um relatório real de atendimento (15.732 linhas): as
+ * primeiras linhas de uma exportação de chat são quase sempre o fluxo de BOT
+ * — a mesma saudação repetida para cliente atrás de cliente. Amostrar só o
+ * início faz a heurística de "texto livre" ver pouca variedade e perder a
+ * coluna de mensagem de verdade para uma coluna de UUID, que é sempre única
+ * por construção.
+ */
+describe("detecção de coluna sobrevive a um início repetitivo", () => {
+  /**
+   * Reproduz o mecanismo do bug achado contra o relatório real
+   * (`message-export-2026-09_1.xlsx`, 15.732 linhas): as PRIMEIRAS sessões do
+   * arquivo por acaso são curtas e dominadas pelo fluxo de boas-vindas do
+   * bot — poucas linhas reais, muitas templates repetidas. As sessões mais
+   * adiante, a maioria, são atendimentos de verdade: uma saudação e depois
+   * conversa variada de cliente.
+   *
+   * Uma amostra das PRIMEIRAS 40 linhas do arquivo real pegava só essas
+   * poucas sessões iniciais — 47,5% de repetição, medido. Uma amostra
+   * ESPALHADA alcança sessões de todo o arquivo, e a repetição dilui: medido
+   * 90,2% de variedade no arquivo real, e é essa diferença que decide se a
+   * coluna de mensagem (texto livre) ou a coluna de UUID (sempre única, por
+   * construção) vence a disputa pelo campo "texto".
+   *
+   * Sessões de tamanho VARIÁVEL, de proposito: um período fixo alinhado ao
+   * passo da amostra faria a amostragem sempre cair na mesma posição dentro
+   * de cada sessão — um artefato do teste, não do bug real.
+   */
+  function relatorioComBotNoInicio(): LinhaDaPlanilha[] {
+    const REAIS = [
+      "Boa tarde, eu queria um orçamento para um computador para trabalho e jogo",
+      "Claro! Me conta o que você pretende fazer com ela, se puder",
+      "É para trabalho com gráficos e também para jogar à noite, tipo Battlefield",
+      "Tenho uma dúvida sobre a garantia dos produtos que vocês vendem",
+      "Vocês entregam para o Ceará inteiro ou só Fortaleza?",
+      "Consegui aprovar o orçamento aqui com a diretoria, pode seguir",
+      "Prefiro pagar parcelado em até 10 vezes no cartão de crédito",
+      "Qual o prazo de montagem depois que o pedido é fechado?",
+    ];
+    const BOTS = [
+      "Olá! Seja bem-vindo(a) à loja. Para começar, escolha uma opção de atendimento:",
+      "Entendi! Para eu te direcionar, me conta o foco do atendimento hoje?",
+      "Ótimo! Em instantes nossa equipe vai te atender.",
+    ];
+
+    function uuid(n: number): string {
+      const hex = n.toString(16).padStart(8, "0");
+      return `${hex}-0000-4000-8000-${"0".repeat(8)}${hex.slice(0, 4)}`;
+    }
+
+    const linhas: LinhaDaPlanilha[] = [];
+    let numero = 2;
+    let idMensagem = 0;
+    let idReal = 0;
+
+    function adicionar(texto: string): void {
+      linhas.push({
+        numero: numero++,
+        valores: { "Mensagem/ID": uuid(idMensagem++), "Mensagem/Conteúdo": texto },
+      });
+    }
+
+    // As primeiras 6 sessões: curtas, quase só bot — como o começo real do
+    // arquivo.
+    for (let sessao = 0; sessao < 6; sessao += 1) {
+      for (let linhaDoBot = 0; linhaDoBot < 6; linhaDoBot += 1) {
+        adicionar(BOTS[linhaDoBot % BOTS.length] as string);
+      }
+      adicionar(`${REAIS[idReal % REAIS.length]} (${idReal++})`);
+    }
+
+    // As 150 sessões seguintes: uma saudação e uma conversa real de tamanho
+    // variável — o perfil típico do restante do arquivo.
+    for (let sessao = 0; sessao < 150; sessao += 1) {
+      adicionar(BOTS[0] as string);
+      const mensagensReais = 3 + (sessao % 4);
+      for (let i = 0; i < mensagensReais; i += 1) {
+        adicionar(`${REAIS[idReal % REAIS.length]} (${idReal++})`);
+      }
+    }
+
+    return linhas;
+  }
+
+  it("acha a coluna de mensagem mesmo com as primeiras sessões dominadas por bot", () => {
+    const relatorio = relatorioComBotNoInicio();
+
+    const { mapeamento } = proporMapeamento(
+      ["Mensagem/ID", "Mensagem/Conteúdo"],
+      relatorio,
+    );
+
+    assert.equal(
+      mapeamento.texto,
+      "Mensagem/Conteúdo",
+      "a coluna de UUID (Mensagem/ID) não pode vencer a de texto de verdade",
+    );
+  });
+});

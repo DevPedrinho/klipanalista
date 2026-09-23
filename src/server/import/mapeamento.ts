@@ -212,6 +212,36 @@ export interface PropostaDeMapeamento {
 const AMOSTRA = 40;
 
 /**
+ * Escolhe `tamanho` linhas ESPALHADAS pelo arquivo, nao as primeiras.
+ *
+ * Medido contra um relatorio real de atendimento: as primeiras linhas sao
+ * quase sempre o inicio da exportacao, e num export de chat isso e o fluxo de
+ * BOT — a mesma saudacao repetida para cliente atras de cliente. Numa
+ * planilha de 15.732 linhas, as 40 primeiras trouxeram 47,5% de valores
+ * repetidos (unicidade abaixo do corte de 0,5 que a heuristica de texto livre
+ * exige), e a coluna de mensagem de verdade (`Mensagem/Conteudo`) perdeu para
+ * uma coluna de UUID (`Mensagem/ID`) — que e sempre unica por construcao.
+ *
+ * Uma amostra espalhada a cada N linhas atravessa varios atendimentos
+ * diferentes em vez de ficar presa ao inicio de um so, e a mesma planilha
+ * sobe para 90,2% de unicidade. O corte de detecção passa a refletir o
+ * arquivo inteiro, nao so a abertura dele.
+ */
+function amostraEspalhada<T>(itens: T[], tamanho: number): T[] {
+  if (itens.length <= tamanho) return itens;
+
+  const passo = Math.max(1, Math.floor(itens.length / tamanho));
+  const amostra: T[] = [];
+
+  for (let indice = 0; indice < itens.length && amostra.length < tamanho; indice += passo) {
+    const item = itens[indice];
+    if (item !== undefined) amostra.push(item);
+  }
+
+  return amostra;
+}
+
+/**
  * Propoe de que coluna sai cada campo.
  *
  * A pontuacao soma nome e conteudo em vez de escolher um: o nome sozinho
@@ -223,11 +253,13 @@ export function proporMapeamento(
   cabecalhos: string[],
   linhas: LinhaDaPlanilha[],
 ): PropostaDeMapeamento {
+  const linhasDaAmostra = amostraEspalhada(linhas, AMOSTRA);
+
   const amostraPorColuna = new Map<string, string[]>();
   for (const cabecalho of cabecalhos) {
     amostraPorColuna.set(
       cabecalho,
-      linhas.slice(0, AMOSTRA).map((l) => l.valores[cabecalho] ?? ""),
+      linhasDaAmostra.map((l) => l.valores[cabecalho] ?? ""),
     );
   }
 
