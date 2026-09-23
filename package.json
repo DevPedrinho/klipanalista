@@ -1,42 +1,35 @@
 {
-  "name": "flowi-copilot-comercial",
-  "version": "0.1.0",
+  "name": "klipanalista",
+  "version": "0.2.0",
   "private": true,
-  "description": "Flowi Copilot Comercial - consultor de CRM e inteligencia comercial para a KlipFlowi",
+  "description": "Klip Analista - atendimentos da KlipFlowi sincronizados no Supabase",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "verify:scoring": "tsx --tsconfig scripts/tsconfig.json scripts/verify-scoring.ts",
-    "test": "tsx --tsconfig tests/tsconfig.json --test tests/*.test.ts",
-    "test:watch": "tsx --tsconfig tests/tsconfig.json --test --watch tests/*.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.126.0",
-    "exceljs": "^4.4.0",
-    "next": "^16.3.5",
-    "openai": "^7.21.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "@supabase/supabase-js": "^2",
+    "next": "^16",
+    "react": "^19",
+    "react-dom": "^19",
     "server-only": "^0.0.1",
-    "zod": "3.25.76"
+    "zod": "^4"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "4.1.13",
-    "@types/node": "22.18.1",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "eslint": "9.35.0",
-    "eslint-config-next": "^16.3.5",
-    "playwright": "^1.63.0",
-    "tailwindcss": "4.1.13",
-    "tsx": "^4.23.13",
-    "typescript": "5.9.2"
-  },
-  "overrides": {
-    "uuid": "^11.1.0"
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "^16",
+    "tailwindcss": "^4",
+    "typescript": "^5.9",
+    "vitest": "^3"
   }
 }

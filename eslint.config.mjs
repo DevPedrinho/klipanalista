@@ -10,7 +10,7 @@ const eslintConfig = [
   ...nextCoreWebVitals,
   ...nextTypescript,
   {
-    ignores: [".next/**", "node_modules/**", "next-env.d.ts", "scripts/stubs/**"],
+    ignores: [".next/**", "node_modules/**", "next-env.d.ts"],
   },
 ];
 
